@@ -1,5 +1,6 @@
 import React, { Component, ReactNode } from 'react';
 import { FirebaseError } from 'firebase/app';
+import { captureException } from '../lib/sentry-config';
 
 interface Props {
   children: ReactNode;
@@ -9,12 +10,13 @@ interface State {
   hasError: boolean;
   error: Error | null;
   errorInfo: React.ErrorInfo | null;
+  eventId: string | null;
 }
 
 export class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
     super(props);
-    this.state = { hasError: false, error: null, errorInfo: null };
+    this.state = { hasError: false, error: null, errorInfo: null, eventId: null };
   }
 
   static getDerivedStateFromError(error: Error): Partial<State> {
@@ -30,6 +32,24 @@ export class ErrorBoundary extends Component<Props, State> {
       console.error('Firebase Error Code:', error.code);
       console.error('Firebase Error Message:', error.message);
       console.error('Firebase Error Details:', error.customData);
+    }
+
+    // Report to Sentry
+    try {
+      captureException(error, {
+        tags: {
+          boundary: 'root',
+          firebase: error instanceof FirebaseError ? 'true' : 'false',
+          code: error instanceof FirebaseError ? error.code : undefined,
+        },
+        extra: {
+          componentStack: errorInfo.componentStack,
+          errorInfo,
+        },
+        level: 'error',
+      });
+    } catch (sentryError) {
+      console.error('Failed to report error to Sentry:', sentryError);
     }
   }
 

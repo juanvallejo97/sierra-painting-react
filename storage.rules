@@ -1,0 +1,147 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function getUserData() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasCompanyId() {
+      return isAuthenticated() && getUserData().companyId != null;
+    }
+
+    function belongsToUserCompany(companyId) {
+      return hasCompanyId() && getUserData().companyId == companyId;
+    }
+
+    function isAdmin() {
+      return hasCompanyId() && getUserData().role == 'admin';
+    }
+
+    function isManager() {
+      return hasCompanyId() && (getUserData().role == 'manager' || getUserData().role == 'admin');
+    }
+
+    function isValidImageFile() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    function isValidDocumentFile() {
+      return request.resource.contentType in [
+        'application/pdf',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'text/plain'
+      ];
+    }
+
+    function isValidFileType() {
+      return isValidImageFile() || isValidDocumentFile();
+    }
+
+    function isValidImageSize() {
+      return request.resource.size <= 10 * 1024 * 1024; // 10MB for images
+    }
+
+    function isValidDocumentSize() {
+      return request.resource.size <= 50 * 1024 * 1024; // 50MB for documents
+    }
+
+    function isValidFileSize() {
+      return (isValidImageFile() && isValidImageSize()) ||
+             (isValidDocumentFile() && isValidDocumentSize());
+    }
+
+    // Company folders - all company data organized by companyId
+    match /companies/{companyId}/{allPaths=**} {
+      // Users can read files from their own company
+      allow read: if belongsToUserCompany(companyId);
+
+      // Users can write files to their own company (with validation)
+      allow write: if belongsToUserCompany(companyId)
+                   && isValidFileType()
+                   && isValidFileSize();
+
+      // Only admins can delete files
+      allow delete: if isAdmin() && belongsToUserCompany(companyId);
+    }
+
+    // Job photos - organized by company and job
+    match /companies/{companyId}/jobs/{jobId}/{fileName} {
+      allow read: if belongsToUserCompany(companyId);
+
+      allow write: if belongsToUserCompany(companyId)
+                   && isValidImageFile()
+                   && isValidImageSize();
+
+      allow delete: if isManager() && belongsToUserCompany(companyId);
+    }
+
+    // Invoice receipts and documents
+    match /companies/{companyId}/invoices/{invoiceId}/{fileName} {
+      allow read: if belongsToUserCompany(companyId);
+
+      allow write: if isManager()
+                   && belongsToUserCompany(companyId)
+                   && isValidFileType()
+                   && isValidFileSize();
+
+      allow delete: if isAdmin() && belongsToUserCompany(companyId);
+    }
+
+    // Estimate documents
+    match /companies/{companyId}/estimates/{estimateId}/{fileName} {
+      allow read: if belongsToUserCompany(companyId);
+
+      allow write: if isManager()
+                   && belongsToUserCompany(companyId)
+                   && isValidDocumentFile()
+                   && isValidDocumentSize();
+
+      allow delete: if isAdmin() && belongsToUserCompany(companyId);
+    }
+
+    // User profile photos
+    match /companies/{companyId}/users/{userId}/{fileName} {
+      // Users can read profile photos from their company
+      allow read: if belongsToUserCompany(companyId)
+                 && fileName.matches('profile\\.(jpg|jpeg|png|gif|webp)');
+
+      // Users can upload their own profile photo
+      allow write: if belongsToUserCompany(companyId)
+                   && (request.auth.uid == userId || isManager())
+                   && fileName.matches('profile\\.(jpg|jpeg|png|gif|webp)')
+                   && isValidImageFile()
+                   && isValidImageSize();
+
+      // Users can delete their own profile photo, admins can delete any
+      allow delete: if belongsToUserCompany(companyId)
+                    && (request.auth.uid == userId || isAdmin())
+                    && fileName.matches('profile\\.(jpg|jpeg|png|gif|webp)');
+    }
+
+    // Time entry attachments (receipts, photos, etc.)
+    match /companies/{companyId}/timeEntries/{entryId}/{fileName} {
+      allow read: if belongsToUserCompany(companyId);
+
+      allow write: if belongsToUserCompany(companyId)
+                   && isValidFileType()
+                   && isValidFileSize();
+
+      allow delete: if isManager() && belongsToUserCompany(companyId);
+    }
+
+    // Deny all other paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

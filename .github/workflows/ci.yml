@@ -69,9 +69,9 @@ jobs:
         with:
           args: --severity-threshold=high
 
-  # Unit and integration tests
-  test:
-    name: Tests
+  # Unit tests
+  test-unit:
+    name: Unit Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -88,32 +88,88 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests
-        run: npm test -- --run
+      - name: Run unit tests
+        run: npm test -- --run --reporter=verbose
 
       - name: Run tests with coverage
-        run: npm run test:coverage
+        run: npm run test:coverage -- --run
 
       - name: Upload coverage reports
         uses: codecov/codecov-action@v4
+        if: always()
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage/coverage-final.json
           flags: unittests
-          name: codecov-umbrella
+          name: unit-tests-coverage
 
       - name: Archive coverage artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
+          name: coverage-report-unit
           path: coverage/
+
+  # Firebase Emulator tests
+  test-emulator:
+    name: Firebase Emulator Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Java (for Firebase Emulators)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Cache Firebase Emulators
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}
+
+      - name: Start Firebase Emulators
+        run: |
+          npx firebase emulators:start --only auth,firestore,storage &
+          echo "Waiting for emulators to start..."
+          sleep 15
+
+      - name: Verify emulators are running
+        run: |
+          curl -f http://localhost:8080 || (echo "Firestore emulator not running" && exit 1)
+          curl -f http://localhost:9099 || (echo "Auth emulator not running" && exit 1)
+
+      - name: Run emulator integration tests
+        run: npm run test:emulator
+
+      - name: Run Firestore Rules tests
+        run: npm run test:rules
+
+      - name: Check Rules coverage (90%+ required)
+        run: npm run test:rules:coverage
+
+      - name: Stop Firebase Emulators
+        if: always()
+        run: pkill -f "firebase.*emulators" || true
 
   # Build check
   build:
     name: Build
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [quality, test]
+    needs: [quality, test-unit, test-emulator]
 
     steps:
       - name: Checkout code

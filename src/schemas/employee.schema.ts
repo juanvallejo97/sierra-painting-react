@@ -34,7 +34,7 @@ export const createEmployeeSchema = z.object({
       return val;
     }),
   role: z.enum(['admin', 'manager', 'worker', 'staff', 'crew'], {
-    errorMap: () => ({ message: 'Invalid role selected' }),
+    message: 'Invalid role selected',
   }),
 });
 

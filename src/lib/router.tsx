@@ -6,6 +6,7 @@ import { Loader2 } from 'lucide-react';
  * Loading screen component
  */
 export function LoadingScreen() {
+  console.log('LoadingScreen rendering');
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">
       <div className="text-center">
@@ -39,14 +40,18 @@ export function ProtectedRoute() {
 export function PublicRoute() {
   const { user, loading } = useAuth();
 
+  console.log('PublicRoute - user:', user?.email, 'loading:', loading);
+
   if (loading) {
     return <LoadingScreen />;
   }
 
   if (user) {
+    console.log('User authenticated, redirecting to dashboard');
     return <Navigate to="/dashboard" replace />;
   }
 
+  console.log('No user, rendering public route');
   return <Outlet />;
 }
 

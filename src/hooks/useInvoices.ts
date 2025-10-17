@@ -15,6 +15,17 @@ import {
 import { db } from '../lib/firebase';
 import { useAuth } from '../lib/auth-context';
 
+// Re-export types from centralized types file
+export type {
+  Invoice,
+  InvoiceStatus,
+  PaymentRecord,
+  CreateInvoiceData,
+  UpdateInvoiceData,
+  RecordPaymentData,
+} from '../types/invoice';
+
+// Keep original type definition for backward compatibility
 export type InvoiceStatus = 'draft' | 'sent' | 'partially_paid' | 'paid' | 'overdue' | 'cancelled';
 
 export interface PaymentRecord {
@@ -98,30 +109,36 @@ export function useInvoices(statusFilter?: InvoiceStatus) {
   return useQuery({
     queryKey: ['invoices', user?.companyId, statusFilter],
     queryFn: async () => {
-      if (!user?.companyId) {
-        throw new Error('User must belong to a company');
+      if (!user) {
+        throw new Error('User not authenticated');
       }
 
-      const invoicesRef = collection(db, 'invoices');
-      let q = query(
-        invoicesRef,
-        where('companyId', '==', user.companyId),
-        orderBy('date', 'desc')
-      );
+      if (!user.companyId) {
+        console.error('User missing companyId:', user);
+        throw new Error('Error loading ' + user.email + ': User account is not assigned to a company. Please contact your administrator.');
+      }
 
-      if (statusFilter) {
-        q = query(
+      try {
+        const invoicesRef = collection(db, 'invoices');
+        let q = query(
           invoicesRef,
           where('companyId', '==', user.companyId),
-          where('status', '==', statusFilter),
           orderBy('date', 'desc')
         );
-      }
 
-      const snapshot = await getDocs(q);
-      const now = new Date();
+        if (statusFilter) {
+          q = query(
+            invoicesRef,
+            where('companyId', '==', user.companyId),
+            where('status', '==', statusFilter),
+            orderBy('date', 'desc')
+          );
+        }
 
-      return snapshot.docs.map((doc) => {
+        const snapshot = await getDocs(q);
+        const now = new Date();
+
+        return snapshot.docs.map((doc) => {
         const data = doc.data();
         let status = data.status as InvoiceStatus;
 
@@ -164,9 +181,18 @@ export function useInvoices(statusFilter?: InvoiceStatus) {
           createdAt: data.createdAt?.toDate() || new Date(),
           updatedAt: data.updatedAt?.toDate() || new Date(),
         } as Invoice;
-      });
+        });
+      } catch (error: any) {
+        console.error('Error fetching invoices:', error);
+        if (error.code === 'permission-denied') {
+          throw new Error('Access denied. Please check your account permissions.');
+        }
+        throw error;
+      }
     },
     enabled: !!user?.companyId,
+    retry: 2,
+    retryDelay: 1000,
     staleTime: 2 * 60 * 1000, // 2 minutes
   });
 }
@@ -263,11 +289,10 @@ export function useCreateInvoice() {
       const amount = data.subtotal + tax;
       const today = new Date().toISOString().split('T')[0];
 
-      const invoicesRef = collection(db, 'invoices');
-      const docRef = await addDoc(invoicesRef, {
+      // Build invoice data, filtering out undefined optional fields
+      const invoiceData: any = {
         invoiceNumber,
         client: data.client,
-        clientEmail: data.clientEmail,
         subtotal: data.subtotal,
         tax,
         taxRate: data.taxRate,
@@ -278,12 +303,24 @@ export function useCreateInvoice() {
         amountPaid: 0,
         remainingBalance: amount,
         payments: [],
-        jobId: data.jobId,
-        notes: data.notes,
         companyId: user.companyId,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      });
+      };
+
+      // Only add optional fields if they have values
+      if (data.clientEmail) {
+        invoiceData.clientEmail = data.clientEmail;
+      }
+      if (data.jobId) {
+        invoiceData.jobId = data.jobId;
+      }
+      if (data.notes) {
+        invoiceData.notes = data.notes;
+      }
+
+      const invoicesRef = collection(db, 'invoices');
+      const docRef = await addDoc(invoicesRef, invoiceData);
 
       return docRef.id;
     },
@@ -469,16 +506,22 @@ export function useRecordPayment() {
         throw new Error('Payment amount exceeds remaining balance');
       }
 
-      // Create new payment record
-      const newPayment: PaymentRecord = {
+      // Create new payment record, filtering out undefined optional fields
+      const newPayment: any = {
         id: `PAY-${Date.now()}`,
         amount: payment.amount,
         paidDate: payment.paidDate,
         paymentMethod: payment.paymentMethod,
-        reference: payment.reference,
-        notes: payment.notes,
         createdAt: new Date(),
       };
+
+      // Only add optional fields if they have values
+      if (payment.reference) {
+        newPayment.reference = payment.reference;
+      }
+      if (payment.notes) {
+        newPayment.notes = payment.notes;
+      }
 
       // Determine new status
       let newStatus: InvoiceStatus;
@@ -490,16 +533,21 @@ export function useRecordPayment() {
         newStatus = 'partially_paid';
       }
 
-      // Update invoice
-      const payments = invoiceData.payments || [];
-      await updateDoc(invoiceRef, {
+      // Build update data, filtering out undefined fields
+      const updateData: any = {
         amountPaid: newAmountPaid,
         remainingBalance: newRemainingBalance,
-        payments: [...payments, newPayment],
+        payments: [...(invoiceData.payments || []), newPayment],
         status: newStatus,
-        paidDate: newStatus === 'paid' ? payment.paidDate : invoiceData.paidDate,
         updatedAt: serverTimestamp(),
-      });
+      };
+
+      // Only set paidDate if the invoice is now fully paid
+      if (newStatus === 'paid') {
+        updateData.paidDate = payment.paidDate;
+      }
+
+      await updateDoc(invoiceRef, updateData);
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['invoices', user?.companyId] });

@@ -80,8 +80,8 @@ export function PartialPaymentDialog({
     formState: { errors },
     reset,
     setValue,
-  } = useForm<PartialPaymentFormData>({
-    resolver: zodResolver(partialPaymentSchema),
+  } = useForm<any>({
+    resolver: zodResolver(partialPaymentSchema) as any,
     defaultValues: {
       paidDate: new Date().toISOString().split('T')[0],
       paymentMethod: 'cash',
@@ -199,7 +199,7 @@ export function PartialPaymentDialog({
               </div>
             </div>
 
-            <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+            <form onSubmit={handleSubmit(onSubmit as any)} className="space-y-4">
               {/* Error Alert */}
               {recordPayment.isError && (
                 <Alert variant="destructive">
@@ -218,7 +218,7 @@ export function PartialPaymentDialog({
                   id="amount"
                   type="text"
                   placeholder="0.00"
-                  error={!!errors.amount || exceedsBalance}
+                  error={!!errors.amount || (exceedsBalance ? true : false)}
                   disabled={recordPayment.isPending}
                   {...register('amount')}
                   onChange={(e) => {
@@ -335,7 +335,7 @@ export function PartialPaymentDialog({
                 </Button>
                 <Button
                   type="submit"
-                  disabled={recordPayment.isPending || !paymentAmount || exceedsBalance}
+                  disabled={recordPayment.isPending || !paymentAmount || (exceedsBalance ? true : false)}
                   loading={recordPayment.isPending}
                   loadingText="Recording payment..."
                 >

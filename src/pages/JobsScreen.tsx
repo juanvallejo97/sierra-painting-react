@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Plus, MapPin, Calendar, Users, Briefcase, Trash2, Pencil } from 'lucide-react';
+// import { Link } from 'react-router-dom';
+import { Plus, MapPin, Calendar, Users, Briefcase, Trash2, Pencil, Eye } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -10,10 +10,11 @@ import { EmptyState } from '../components/ui/empty-state';
 import { SearchBar } from '../components/ui/search-bar';
 import { Skeleton } from '../components/ui/skeleton';
 import { Alert, AlertDescription } from '../components/ui/alert';
-import { useJobs, useDeleteJob, type Job, type JobStatus } from '../hooks/useJobs';
+import { useJobs, useDeleteJob, useUpdateJob, type Job, type JobStatus } from '../hooks/useJobs';
 import { CreateJobDialog } from '../components/dialogs/CreateJobDialog';
 import { EditJobDialog } from '../components/dialogs/EditJobDialog';
 import { ConfirmDeleteDialog } from '../components/dialogs/ConfirmDeleteDialog';
+import { ViewJobDialog } from '../components/dialogs/ViewJobDialog';
 
 export function JobsScreen() {
   const [search, setSearch] = useState('');
@@ -21,11 +22,13 @@ export function JobsScreen() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Job | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Job | null>(null);
+  const [viewTarget, setViewTarget] = useState<Job | null>(null);
 
   const { data: jobs = [], isLoading, error } = useJobs(
     statusFilter === 'all' ? undefined : statusFilter
   );
   const deleteJob = useDeleteJob();
+  const updateJob = useUpdateJob();
 
   // Filter jobs by search
   const filteredJobs = jobs.filter((job) => {
@@ -55,6 +58,17 @@ export function JobsScreen() {
     return status.split('-').map(word =>
       word.charAt(0).toUpperCase() + word.slice(1)
     ).join(' ');
+  };
+
+  const handleStatusChange = async (jobId: string, newStatus: JobStatus) => {
+    try {
+      await updateJob.mutateAsync({
+        id: jobId,
+        data: { status: newStatus },
+      });
+    } catch (error) {
+      console.error('Failed to update job status:', error);
+    }
   };
 
   const columns: Column<Job>[] = [
@@ -112,6 +126,14 @@ export function JobsScreen() {
       header: '',
       render: (job) => (
         <div className="flex gap-2 justify-end">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setViewTarget(job)}
+          >
+            <Eye className="size-3 mr-1" />
+            View
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -276,6 +298,14 @@ export function JobsScreen() {
         title="Delete Job"
         description={`Are you sure you want to delete "${deleteTarget?.name}"? All associated data including time entries and assignments will be lost.`}
         isLoading={deleteJob.isPending}
+      />
+
+      {/* View Job Dialog */}
+      <ViewJobDialog
+        job={viewTarget}
+        open={!!viewTarget}
+        onOpenChange={(open) => !open && setViewTarget(null)}
+        onStatusChange={handleStatusChange}
       />
     </AppLayout>
   );

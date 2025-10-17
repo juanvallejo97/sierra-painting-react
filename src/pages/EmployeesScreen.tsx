@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Mail, Phone, MoreVertical, UserPlus, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Mail, Phone, UserPlus, Pencil, Trash2 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';

@@ -63,6 +63,7 @@ export function EditJobDialog({
   useEffect(() => {
     if (job) {
       setValue('name', job.name);
+      setValue('client', job.client);
       setValue('address', job.address);
       setValue('startDate', job.startDate);
       setValue('endDate', job.endDate || '');
@@ -148,6 +149,23 @@ export function EditJobDialog({
             )}
           </div>
 
+          {/* Client */}
+          <div className="space-y-2">
+            <Label htmlFor="client" required>
+              Client / Customer
+            </Label>
+            <Input
+              id="client"
+              placeholder="John Smith"
+              error={!!errors.client}
+              disabled={updateJob.isPending}
+              {...register('client')}
+            />
+            {errors.client && (
+              <p className="text-sm text-destructive">{errors.client.message}</p>
+            )}
+          </div>
+
           {/* Address */}
           <div className="space-y-2">
             <Label htmlFor="address" required>
@@ -229,8 +247,8 @@ export function EditJobDialog({
 
           {/* Worker Selection */}
           <div className="space-y-2">
-            <Label required>
-              Assign Workers
+            <Label>
+              Assign Workers <span className="text-muted-foreground">(optional)</span>
               {selectedWorkers.length > 0 && (
                 <span className="text-muted-foreground ml-2">
                   ({selectedWorkers.length} selected)
@@ -272,8 +290,8 @@ export function EditJobDialog({
               )}
             </div>
             {selectedWorkers.length === 0 && (
-              <p className="text-sm text-destructive">
-                At least one worker must be assigned
+              <p className="text-sm text-muted-foreground">
+                Workers can be assigned later if needed
               </p>
             )}
           </div>
@@ -318,7 +336,7 @@ export function EditJobDialog({
             </Button>
             <Button
               type="submit"
-              disabled={updateJob.isPending || selectedWorkers.length === 0}
+              disabled={updateJob.isPending}
               loading={updateJob.isPending}
               loadingText="Updating job..."
             >

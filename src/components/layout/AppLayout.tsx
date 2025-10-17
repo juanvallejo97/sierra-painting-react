@@ -10,6 +10,8 @@ import {
   Settings,
   Calendar,
   LogOut,
+  Receipt,
+  CalendarClock,
 } from 'lucide-react';
 import { useAuth, isAdmin, isManager } from '../../lib/auth-context';
 import { Button } from '../ui/button';
@@ -34,6 +36,8 @@ export function AppLayout({ children }: AppLayoutProps) {
       return [
         { icon: Home, label: 'Dashboard', path: '/admin/home' },
         { icon: Clock, label: 'Review Time', path: '/admin/review' },
+        { icon: Receipt, label: 'Payroll', path: '/admin/payroll' },
+        { icon: CalendarClock, label: 'Scheduler', path: '/admin/scheduler' },
         { icon: Briefcase, label: 'Jobs', path: '/jobs' },
         { icon: DollarSign, label: 'Invoices', path: '/invoices' },
         { icon: FileText, label: 'Estimates', path: '/estimates' },
@@ -45,7 +49,7 @@ export function AppLayout({ children }: AppLayoutProps) {
     // Worker navigation
     return [
       { icon: Home, label: 'Home', path: '/worker/home' },
-      { icon: Clock, label: 'Timeclock', path: '/worker/home' },
+      { icon: Clock, label: 'Time Clock', path: '/worker/timeclock' },
       { icon: Calendar, label: 'Schedule', path: '/worker/schedule' },
       { icon: Settings, label: 'Settings', path: '/settings' },
     ];

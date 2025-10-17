@@ -9,6 +9,11 @@ export const createJobSchema = z.object({
     .min(3, 'Job name must be at least 3 characters')
     .max(200, 'Job name must be less than 200 characters')
     .trim(),
+  client: z
+    .string()
+    .min(2, 'Client name must be at least 2 characters')
+    .max(200, 'Client name must be less than 200 characters')
+    .trim(),
   address: z
     .string()
     .min(5, 'Address must be at least 5 characters')
@@ -30,8 +35,8 @@ export const createJobSchema = z.object({
     }, 'Invalid date format'),
   workers: z
     .array(z.string())
-    .min(1, 'At least one worker must be assigned')
-    .default([]),
+    .default([])
+    .optional(),
   description: z
     .string()
     .max(1000, 'Description must be less than 1000 characters')
@@ -62,6 +67,12 @@ export const updateJobSchema = z.object({
     .string()
     .min(3, 'Job name must be at least 3 characters')
     .max(200, 'Job name must be less than 200 characters')
+    .trim()
+    .optional(),
+  client: z
+    .string()
+    .min(2, 'Client name must be at least 2 characters')
+    .max(200, 'Client name must be less than 200 characters')
     .trim()
     .optional(),
   address: z

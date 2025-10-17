@@ -20,6 +20,7 @@ export type JobStatus = 'scheduled' | 'in-progress' | 'completed' | 'cancelled';
 export interface Job {
   id: string;
   name: string;
+  client: string; // Customer/client name
   address: string;
   status: JobStatus;
   startDate: string;
@@ -35,6 +36,7 @@ export interface Job {
 
 export interface CreateJobData {
   name: string;
+  client: string;
   address: string;
   startDate: string;
   endDate?: string;
@@ -56,47 +58,63 @@ export function useJobs(statusFilter?: JobStatus) {
   return useQuery({
     queryKey: ['jobs', user?.companyId, statusFilter],
     queryFn: async () => {
-      if (!user?.companyId) {
-        throw new Error('User must belong to a company');
+      if (!user) {
+        throw new Error('User not authenticated');
       }
 
-      const jobsRef = collection(db, 'jobs');
-      let q = query(
-        jobsRef,
-        where('companyId', '==', user.companyId),
-        orderBy('startDate', 'desc')
-      );
+      if (!user.companyId) {
+        console.error('User missing companyId:', user);
+        throw new Error('Error loading ' + user.email + ': User account is not assigned to a company. Please contact your administrator.');
+      }
 
-      if (statusFilter) {
-        q = query(
+      try {
+        const jobsRef = collection(db, 'jobs');
+        let q = query(
           jobsRef,
           where('companyId', '==', user.companyId),
-          where('status', '==', statusFilter),
           orderBy('startDate', 'desc')
         );
-      }
 
-      const snapshot = await getDocs(q);
-      return snapshot.docs.map((doc) => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          name: data.name,
-          address: data.address,
-          status: data.status,
-          startDate: data.startDate,
-          endDate: data.endDate,
-          workers: data.workers || [],
-          workerNames: data.workerNames || [],
-          description: data.description,
-          notes: data.notes,
-          companyId: data.companyId,
-          createdAt: data.createdAt?.toDate() || new Date(),
-          updatedAt: data.updatedAt?.toDate() || new Date(),
-        } as Job;
-      });
+        if (statusFilter) {
+          q = query(
+            jobsRef,
+            where('companyId', '==', user.companyId),
+            where('status', '==', statusFilter),
+            orderBy('startDate', 'desc')
+          );
+        }
+
+        const snapshot = await getDocs(q);
+        return snapshot.docs.map((doc) => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            name: data.name,
+            client: data.client || '',
+            address: data.address,
+            status: data.status,
+            startDate: data.startDate,
+            endDate: data.endDate,
+            workers: data.workers || [],
+            workerNames: data.workerNames || [],
+            description: data.description,
+            notes: data.notes,
+            companyId: data.companyId,
+            createdAt: data.createdAt?.toDate() || new Date(),
+            updatedAt: data.updatedAt?.toDate() || new Date(),
+          } as Job;
+        });
+      } catch (error: any) {
+        console.error('Error fetching jobs:', error);
+        if (error.code === 'permission-denied') {
+          throw new Error('Access denied. Please check your account permissions.');
+        }
+        throw error;
+      }
     },
     enabled: !!user?.companyId,
+    retry: 2,
+    retryDelay: 1000,
     staleTime: 2 * 60 * 1000, // 2 minutes
   });
 }
@@ -131,6 +149,7 @@ export function useJob(jobId?: string) {
       return {
         id: snapshot.id,
         name: data.name,
+        client: data.client || '',
         address: data.address,
         status: data.status,
         startDate: data.startDate,
@@ -157,26 +176,47 @@ export function useCreateJob() {
 
   return useMutation({
     mutationFn: async (data: CreateJobData) => {
-      if (!user?.companyId) {
-        throw new Error('User must belong to a company');
+      if (!user) {
+        throw new Error('User not authenticated');
       }
 
-      const jobsRef = collection(db, 'jobs');
-      const docRef = await addDoc(jobsRef, {
-        name: data.name,
-        address: data.address,
-        status: 'scheduled' as JobStatus,
-        startDate: data.startDate,
-        endDate: data.endDate,
-        workers: data.workers,
-        description: data.description,
-        notes: data.notes,
-        companyId: user.companyId,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+      if (!user.companyId) {
+        console.error('Cannot create job - user missing companyId:', user);
+        throw new Error('Error loading ' + user.email + ': Your account is not assigned to a company. Please contact your administrator.');
+      }
 
-      return docRef.id;
+      try {
+        const jobsRef = collection(db, 'jobs');
+        const jobData = {
+          name: data.name,
+          client: data.client,
+          address: data.address,
+          status: 'scheduled' as JobStatus,
+          startDate: data.startDate,
+          endDate: data.endDate,
+          workers: data.workers,
+          description: data.description,
+          notes: data.notes,
+          companyId: user.companyId,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        };
+
+        console.log('Creating job with data:', jobData);
+        const docRef = await addDoc(jobsRef, jobData);
+        console.log('Job created successfully:', docRef.id);
+
+        return docRef.id;
+      } catch (error: any) {
+        console.error('Error creating job:', error);
+        if (error.code === 'permission-denied') {
+          throw new Error('Access denied. You do not have permission to create jobs.');
+        }
+        if (error.message?.includes('companyId')) {
+          throw new Error('Failed to create job: Your account is missing required company information. Please contact your administrator.');
+        }
+        throw new Error('Failed to create job: ' + error.message);
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['jobs', user?.companyId] });
@@ -211,6 +251,7 @@ export function useUpdateJob() {
       };
 
       if (data.name !== undefined) updateData.name = data.name;
+      if (data.client !== undefined) updateData.client = data.client;
       if (data.address !== undefined) updateData.address = data.address;
       if (data.status !== undefined) updateData.status = data.status;
       if (data.startDate !== undefined) updateData.startDate = data.startDate;

@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Plus, DollarSign, Calendar, FileText, AlertCircle, Trash2, Send, X } from 'lucide-react';
+// import { Link } from 'react-router-dom';
+import { Plus, DollarSign, Calendar, FileText, AlertCircle, Trash2, Send, X, Eye } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -16,6 +16,7 @@ import { CreateInvoiceDialog } from '../components/dialogs/CreateInvoiceDialog';
 import { SendInvoiceDialog } from '../components/dialogs/SendInvoiceDialog';
 import { CancelInvoiceDialog } from '../components/dialogs/CancelInvoiceDialog';
 import { ConfirmDeleteDialog } from '../components/dialogs/ConfirmDeleteDialog';
+import { ViewInvoiceDialog } from '../components/dialogs/ViewInvoiceDialog';
 
 export function InvoicesScreen() {
   const [search, setSearch] = useState('');
@@ -25,12 +26,21 @@ export function InvoicesScreen() {
   const [cancelTarget, setCancelTarget] = useState<Invoice | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Invoice | null>(null);
+  const [viewTarget, setViewTarget] = useState<Invoice | null>(null);
 
   const deleteInvoice = useDeleteInvoice();
 
-  const { data: invoices = [], isLoading, error } = useInvoices(
-    statusFilter === 'all' ? undefined : statusFilter
+  // Fetch invoices based on filter
+  // For 'sent' tab, fetch all and filter client-side to include partially_paid
+  const shouldFetchAll = statusFilter === 'all' || statusFilter === 'sent';
+  const { data: allInvoices = [], isLoading, error } = useInvoices(
+    shouldFetchAll ? undefined : statusFilter
   );
+
+  // Filter by status (for sent tab, include partially_paid)
+  const invoices = statusFilter === 'sent'
+    ? allInvoices.filter(i => i.status === 'sent' || i.status === 'partially_paid')
+    : allInvoices;
 
   // Filter invoices by search
   const filteredInvoices = invoices.filter((invoice) => {
@@ -135,7 +145,13 @@ export function InvoicesScreen() {
       header: '',
       render: (invoice) => (
         <div className="flex gap-2 justify-end">
-          <Button variant="outline" size="sm">
+          {/* View button - available for all statuses */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setViewTarget(invoice)}
+          >
+            <Eye className="size-3 mr-1" />
             View
           </Button>
 
@@ -172,16 +188,14 @@ export function InvoicesScreen() {
                 <DollarSign className="size-3 mr-1" />
                 Record Payment
               </Button>
-              {invoice.status !== 'paid' && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setCancelTarget(invoice)}
-                >
-                  <X className="size-3 mr-1" />
-                  Cancel
-                </Button>
-              )}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setCancelTarget(invoice)}
+              >
+                <X className="size-3 mr-1" />
+                Cancel
+              </Button>
             </>
           )}
 
@@ -195,21 +209,22 @@ export function InvoicesScreen() {
   ];
 
   // Count invoices by status
+  // Note: 'sent' count includes partially_paid invoices
   const statusCounts = {
-    all: invoices.length,
-    draft: invoices.filter(i => i.status === 'draft').length,
-    sent: invoices.filter(i => i.status === 'sent').length,
-    partially_paid: invoices.filter(i => i.status === 'partially_paid').length,
-    paid: invoices.filter(i => i.status === 'paid').length,
-    overdue: invoices.filter(i => i.status === 'overdue').length,
+    all: allInvoices.length,
+    draft: allInvoices.filter(i => i.status === 'draft').length,
+    sent: allInvoices.filter(i => i.status === 'sent' || i.status === 'partially_paid').length,
+    partially_paid: allInvoices.filter(i => i.status === 'partially_paid').length,
+    paid: allInvoices.filter(i => i.status === 'paid').length,
+    overdue: allInvoices.filter(i => i.status === 'overdue').length,
   };
 
-  // Calculate totals
+  // Calculate totals (use allInvoices to get accurate totals)
   const totals = {
-    outstanding: invoices
+    outstanding: allInvoices
       .filter(i => i.status === 'sent' || i.status === 'overdue' || i.status === 'partially_paid')
       .reduce((sum, i) => sum + i.remainingBalance, 0),
-    paid: invoices
+    paid: allInvoices
       .filter(i => i.status === 'paid')
       .reduce((sum, i) => sum + i.amount, 0),
   };
@@ -239,7 +254,7 @@ export function InvoicesScreen() {
         )}
 
         {/* Summary Cards */}
-        {!isLoading && invoices.length > 0 && (
+        {!isLoading && allInvoices.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="p-4 border rounded-lg">
               <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
@@ -350,7 +365,7 @@ export function InvoicesScreen() {
         )}
 
         {/* Stats Footer */}
-        {!isLoading && invoices.length > 0 && (
+        {!isLoading && allInvoices.length > 0 && (
           <div className="flex items-center justify-between text-sm text-muted-foreground">
             <p>
               Showing {filteredInvoices.length} of {invoices.length} invoices
@@ -397,6 +412,13 @@ export function InvoicesScreen() {
         title="Delete Draft Invoice"
         description={`Are you sure you want to delete invoice ${deleteTarget?.invoiceNumber} for ${deleteTarget?.client}? This action cannot be undone.`}
         isLoading={deleteInvoice.isPending}
+      />
+
+      {/* View Invoice Dialog */}
+      <ViewInvoiceDialog
+        invoice={viewTarget}
+        open={!!viewTarget}
+        onOpenChange={(open) => !open && setViewTarget(null)}
       />
     </AppLayout>
   );

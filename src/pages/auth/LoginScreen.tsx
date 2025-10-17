@@ -18,6 +18,8 @@ import { Alert, AlertDescription } from '../../components/ui/alert';
 import { Logo } from '../../components/ui/logo';
 
 export function LoginScreen() {
+  console.log('LoginScreen rendering');
+
   const navigate = useNavigate();
   const { signIn, error: authError } = useAuth();
   const [showPassword, setShowPassword] = useState(false);

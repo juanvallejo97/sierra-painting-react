@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { FileText, DollarSign } from 'lucide-react';
@@ -51,10 +51,10 @@ export function CreateInvoiceDialog({
     formState: { errors },
     reset,
     setValue,
-  } = useForm<CreateInvoiceFormData>({
-    resolver: zodResolver(createInvoiceSchema),
+  } = useForm<any>({
+    // Don't use zodResolver since subtotal/taxRate are managed by local state
+    // resolver: zodResolver(createInvoiceSchema) as any,
     defaultValues: {
-      taxRate: 8.5,
       dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
         .toISOString()
         .split('T')[0], // 30 days from now
@@ -74,14 +74,48 @@ export function CreateInvoiceDialog({
     }).format(amount);
   };
 
-  const onSubmit = async (data: CreateInvoiceFormData) => {
+  const onSubmit = async (data: any) => {
     try {
-      await createInvoice.mutateAsync({
-        ...data,
-        jobId: jobId || undefined,
-        subtotal: parseFloat(subtotal.replace(/[^0-9.-]/g, '')),
-        taxRate: parseFloat(taxRate.replace(/[^0-9.-]/g, '')),
-      });
+      const subtotalNum = parseFloat(subtotal.replace(/[^0-9.-]/g, ''));
+      const taxRateNum = parseFloat(taxRate.replace(/[^0-9.-]/g, ''));
+
+      // Validate required fields
+      if (!data.client || data.client.trim().length < 2) {
+        console.error('Client name is required');
+        return;
+      }
+
+      if (!data.dueDate) {
+        console.error('Due date is required');
+        return;
+      }
+
+      // Validate numbers
+      if (isNaN(subtotalNum) || subtotalNum <= 0) {
+        console.error('Invalid subtotal');
+        return;
+      }
+
+      // Build invoice data, filtering out undefined optional fields
+      const invoiceData: any = {
+        client: data.client.trim(),
+        dueDate: data.dueDate,
+        subtotal: subtotalNum,
+        taxRate: taxRateNum,
+      };
+
+      // Only add optional fields if they have values
+      if (data.clientEmail?.trim()) {
+        invoiceData.clientEmail = data.clientEmail.trim();
+      }
+      if (data.notes?.trim()) {
+        invoiceData.notes = data.notes.trim();
+      }
+      if (jobId && jobId !== 'none') {
+        invoiceData.jobId = jobId;
+      }
+
+      await createInvoice.mutateAsync(invoiceData);
 
       reset();
       setJobId('');
@@ -114,7 +148,7 @@ export function CreateInvoiceDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <form onSubmit={handleSubmit(onSubmit as any)} className="space-y-4">
           {/* Error Alert */}
           {createInvoice.isError && (
             <Alert variant="destructive">
@@ -134,7 +168,9 @@ export function CreateInvoiceDialog({
               placeholder="John Doe / ABC Company"
               error={!!errors.client}
               disabled={createInvoice.isPending}
-              {...register('client')}
+              required
+              minLength={2}
+              {...register('client', { required: true, minLength: 2 })}
             />
             {errors.client && (
               <p className="text-sm text-destructive">{errors.client.message}</p>
@@ -169,8 +205,8 @@ export function CreateInvoiceDialog({
             <Select
               value={jobId}
               onValueChange={(value) => {
-                setJobId(value);
-                setValue('jobId', value);
+                setJobId(value === 'none' ? '' : value);
+                setValue('jobId', value === 'none' ? '' : value);
               }}
               disabled={createInvoice.isPending}
             >
@@ -178,7 +214,7 @@ export function CreateInvoiceDialog({
                 <SelectValue placeholder="Select a job (optional)" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">None</SelectItem>
+                <SelectItem value="none">None</SelectItem>
                 {jobs.map((job) => (
                   <SelectItem key={job.id} value={job.id}>
                     {job.name}
@@ -204,12 +240,14 @@ export function CreateInvoiceDialog({
                   id="subtotal"
                   type="number"
                   step="0.01"
+                  min="0.01"
                   placeholder="0.00"
                   className="pl-8"
                   value={subtotal}
                   onChange={(e) => setSubtotal(e.target.value)}
                   error={!!errors.subtotal}
                   disabled={createInvoice.isPending}
+                  required
                 />
               </div>
               {errors.subtotal && (
@@ -269,7 +307,8 @@ export function CreateInvoiceDialog({
               min={new Date().toISOString().split('T')[0]}
               error={!!errors.dueDate}
               disabled={createInvoice.isPending}
-              {...register('dueDate')}
+              required
+              {...register('dueDate', { required: true })}
             />
             {errors.dueDate && (
               <p className="text-sm text-destructive">{errors.dueDate.message}</p>

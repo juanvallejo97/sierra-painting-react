@@ -42,8 +42,8 @@ export function CreateJobDialog({
     formState: { errors },
     reset,
     watch,
-  } = useForm<CreateJobFormData>({
-    resolver: zodResolver(createJobSchema),
+  } = useForm<any>({
+    resolver: zodResolver(createJobSchema) as any,
     defaultValues: {
       workers: [],
     },
@@ -93,7 +93,7 @@ export function CreateJobDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <form onSubmit={handleSubmit(onSubmit as any)} className="space-y-4">
           {/* Error Alert */}
           {createJob.isError && (
             <Alert variant="destructive">
@@ -117,6 +117,23 @@ export function CreateJobDialog({
             />
             {errors.name && (
               <p className="text-sm text-destructive">{errors.name.message}</p>
+            )}
+          </div>
+
+          {/* Client */}
+          <div className="space-y-2">
+            <Label htmlFor="client" required>
+              Client / Customer
+            </Label>
+            <Input
+              id="client"
+              placeholder="John Smith"
+              error={!!errors.client}
+              disabled={createJob.isPending}
+              {...register('client')}
+            />
+            {errors.client && (
+              <p className="text-sm text-destructive">{errors.client.message}</p>
             )}
           </div>
 
@@ -179,8 +196,8 @@ export function CreateJobDialog({
 
           {/* Worker Selection */}
           <div className="space-y-2">
-            <Label required>
-              Assign Workers
+            <Label>
+              Assign Workers <span className="text-muted-foreground">(optional)</span>
               {selectedWorkers.length > 0 && (
                 <span className="text-muted-foreground ml-2">
                   ({selectedWorkers.length} selected)
@@ -222,8 +239,8 @@ export function CreateJobDialog({
               )}
             </div>
             {selectedWorkers.length === 0 && (
-              <p className="text-sm text-destructive">
-                At least one worker must be assigned
+              <p className="text-sm text-muted-foreground">
+                Workers can be assigned later if needed
               </p>
             )}
           </div>
@@ -276,7 +293,7 @@ export function CreateJobDialog({
             </Button>
             <Button
               type="submit"
-              disabled={createJob.isPending || selectedWorkers.length === 0}
+              disabled={createJob.isPending}
               loading={createJob.isPending}
               loadingText="Creating job..."
             >

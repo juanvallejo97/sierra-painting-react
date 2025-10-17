@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Plus, FileText, Send, CheckCircle } from 'lucide-react';
+import { Plus, FileText, Send, CheckCircle, Eye } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -10,7 +9,10 @@ import { EmptyState } from '../components/ui/empty-state';
 import { SearchBar } from '../components/ui/search-bar';
 import { Skeleton } from '../components/ui/skeleton';
 import { Alert, AlertDescription } from '../components/ui/alert';
-import { useEstimates, type Estimate, type EstimateStatus } from '../hooks/useEstimates';
+import { useEstimates, useSendEstimate, useConvertEstimateToInvoice, type Estimate, type EstimateStatus } from '../hooks/useEstimates';
+import { CreateEstimateDialog } from '../components/dialogs/CreateEstimateDialog';
+import { ViewEstimateDialog } from '../components/dialogs/ViewEstimateDialog';
+import { toast } from 'sonner';
 
 /**
  * FUTURE ENHANCEMENT: AI-Powered Estimate Creation
@@ -36,10 +38,34 @@ import { useEstimates, type Estimate, type EstimateStatus } from '../hooks/useEs
 export function EstimatesScreen() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<EstimateStatus | 'all'>('all');
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [viewTarget, setViewTarget] = useState<Estimate | null>(null);
 
   const { data: estimates = [], isLoading, error } = useEstimates(
     statusFilter === 'all' ? undefined : statusFilter
   );
+  const sendEstimate = useSendEstimate();
+  const convertToInvoice = useConvertEstimateToInvoice();
+
+  const handleSendEstimate = async (estimateId: string) => {
+    try {
+      await sendEstimate.mutateAsync(estimateId);
+      toast.success('Estimate sent successfully');
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to send estimate');
+    }
+  };
+
+  const handleConvertToInvoice = async (estimateId: string) => {
+    try {
+      const result = await convertToInvoice.mutateAsync(estimateId);
+      toast.success('Estimate converted to invoice successfully');
+      // Could navigate to invoice here if desired
+      console.log('Created invoice:', result.invoiceId);
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to convert estimate');
+    }
+  };
 
   // Filter estimates by search
   const filteredEstimates = estimates.filter((estimate) => {
@@ -132,21 +158,31 @@ export function EstimatesScreen() {
       header: '',
       render: (estimate) => (
         <div className="flex gap-2">
-          <Button variant="outline" size="sm">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setViewTarget(estimate)}
+          >
+            <Eye className="size-3 mr-1" />
             View
           </Button>
-          {estimate.status === 'approved' && (
-            <>
-              <Button size="sm" variant="default">
-                Convert to Job
-              </Button>
-              <Button size="sm" variant="secondary">
-                Convert to Invoice
-              </Button>
-            </>
+          {estimate.status === 'approved' && !estimate.invoiceId && (
+            <Button
+              size="sm"
+              variant="default"
+              onClick={() => handleConvertToInvoice(estimate.id)}
+              disabled={convertToInvoice.isPending}
+            >
+              Convert to Invoice
+            </Button>
           )}
           {estimate.status === 'draft' && (
-            <Button size="sm" variant="default">
+            <Button
+              size="sm"
+              variant="default"
+              onClick={() => handleSendEstimate(estimate.id)}
+              disabled={sendEstimate.isPending}
+            >
               <Send className="size-3 mr-1" />
               Send
             </Button>
@@ -185,12 +221,10 @@ export function EstimatesScreen() {
             <h1>Estimates</h1>
             <p className="text-muted-foreground">Create and manage project estimates</p>
           </div>
-          <Link to="/estimates/create">
-            <Button>
-              <Plus className="size-4 mr-2" />
-              New Estimate
-            </Button>
-          </Link>
+          <Button onClick={() => setCreateDialogOpen(true)}>
+            <Plus className="size-4 mr-2" />
+            New Estimate
+          </Button>
         </div>
 
         {/* Error Alert */}
@@ -303,7 +337,7 @@ export function EstimatesScreen() {
                   !search && statusFilter === 'all'
                     ? {
                         label: 'Create Estimate',
-                        onClick: () => window.location.href = '/estimates/create',
+                        onClick: () => setCreateDialogOpen(true),
                       }
                     : undefined
                 }
@@ -324,6 +358,20 @@ export function EstimatesScreen() {
           </div>
         )}
       </div>
+
+      {/* Create Estimate Dialog */}
+      <CreateEstimateDialog
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
+      />
+
+      {/* View Estimate Dialog */}
+      <ViewEstimateDialog
+        estimate={viewTarget}
+        open={!!viewTarget}
+        onOpenChange={(open) => !open && setViewTarget(null)}
+        onConvertToInvoice={handleConvertToInvoice}
+      />
     </AppLayout>
   );
 }

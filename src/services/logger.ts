@@ -132,7 +132,7 @@ class Logger {
     }
 
     // Send to external monitoring service in production
-    if (!this.isDevelopment && level !== LogLevel.DEBUG) {
+    if (!this.isDevelopment && entry.level !== LogLevel.DEBUG) {
       this.sendToMonitoring(entry);
     }
   }

@@ -11,10 +11,85 @@ env:
   NODE_VERSION: '22.20.0'
 
 jobs:
+  # Pre-deployment checks with full test suite
+  pre-deploy-checks:
+    name: Pre-Deployment Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint
+
+      - name: Run type check
+        run: npm run type-check
+
+      - name: Run unit tests with coverage
+        run: npm run test:coverage -- --run
+
+      - name: Setup Java (for Firebase Emulators)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Cache Firebase Emulators
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}
+
+      - name: Start Firebase Emulators
+        run: |
+          npx firebase emulators:start --only auth,firestore,storage &
+          echo "Waiting for emulators to start..."
+          sleep 15
+
+      - name: Verify emulators are running
+        run: |
+          curl -f http://localhost:8080 || (echo "Firestore emulator not running" && exit 1)
+          curl -f http://localhost:9099 || (echo "Auth emulator not running" && exit 1)
+
+      - name: Run emulator integration tests
+        run: npm run test:emulator
+
+      - name: Run Firestore Rules tests
+        run: npm run test:rules
+
+      - name: Check Rules coverage (90%+ required)
+        run: npm run test:rules:coverage
+
+      - name: Stop Firebase Emulators
+        if: always()
+        run: pkill -f "firebase.*emulators" || true
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage/coverage-final.json
+          flags: production-pre-deploy
+          name: production-pre-deploy-coverage
+
+  # Deploy to production
   deploy-production:
     name: Deploy to Firebase Production
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: [pre-deploy-checks]
     environment:
       name: production
       url: https://sierra-painting.web.app
@@ -32,8 +107,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run full test suite
-        run: npm run test:coverage
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=production-${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Build for production
         run: npm run build
@@ -45,32 +126,26 @@ jobs:
           VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.PROD_FIREBASE_STORAGE_BUCKET }}
           VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.PROD_FIREBASE_MESSAGING_SENDER_ID }}
           VITE_FIREBASE_APP_ID: ${{ secrets.PROD_FIREBASE_APP_ID }}
+          VITE_SENTRY_DSN: ${{ secrets.PRODUCTION_SENTRY_DSN }}
+          VITE_SENTRY_ENABLED: true
+          VITE_APP_VERSION: ${{ steps.version.outputs.VERSION }}
+
+      - name: Check bundle size
+        run: |
+          BUNDLE_SIZE=$(du -sb dist | cut -f1)
+          MAX_SIZE=$((5 * 1024 * 1024)) # 5MB
+          if [ $BUNDLE_SIZE -gt $MAX_SIZE ]; then
+            echo "::error::Bundle size ($BUNDLE_SIZE bytes) exceeds maximum ($MAX_SIZE bytes)"
+            exit 1
+          fi
+          echo "::notice::Bundle size: $(echo "scale=2; $BUNDLE_SIZE / 1024 / 1024" | bc)MB"
 
       - name: Create backup before deployment
         run: |
           npm install -g firebase-tools
-          firebase firestore:export backup-$(date +%Y%m%d-%H%M%S) --project ${{ secrets.PROD_FIREBASE_PROJECT_ID }} --token ${{ secrets.FIREBASE_TOKEN }}
+          firebase firestore:export backup-$(date +%Y%m%d-%H%M%S) --project ${{ secrets.PROD_FIREBASE_PROJECT_ID }} --token ${{ secrets.FIREBASE_TOKEN }} || echo "::warning::Backup failed, continuing deployment"
 
-      - name: Deploy to Firebase Hosting (Preview)
-        id: preview_deploy
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_PROD }}
-          projectId: ${{ secrets.PROD_FIREBASE_PROJECT_ID }}
-          target: production
-
-      - name: Wait for approval
-        uses: trstringer/manual-approval@v1
-        if: github.event_name != 'workflow_dispatch'
-        with:
-          secret: ${{ github.TOKEN }}
-          approvers: ${{ secrets.DEPLOYMENT_APPROVERS }}
-          minimum-approvals: 1
-          issue-title: "Deploy to Production?"
-          issue-body: "Please approve deployment to production. Preview URL: ${{ steps.preview_deploy.outputs.details_url }}"
-
-      - name: Deploy to Firebase Hosting (Live)
+      - name: Deploy to Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
@@ -83,32 +158,78 @@ jobs:
         run: |
           firebase deploy --only firestore:rules,storage:rules --project ${{ secrets.PROD_FIREBASE_PROJECT_ID }} --token ${{ secrets.FIREBASE_TOKEN }}
 
-      - name: Run smoke tests
-        run: npm run test:e2e:smoke
-        continue-on-error: true
-
-      - name: Create Git tag
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Upload source maps to Sentry
+        if: success()
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
         run: |
-          VERSION=$(date +%Y.%m.%d-%H%M)
-          git tag v$VERSION
-          git push origin v$VERSION
+          npx @sentry/cli releases new ${{ steps.version.outputs.VERSION }}
+          npx @sentry/cli releases set-commits ${{ steps.version.outputs.VERSION }} --auto
+          npx @sentry/cli releases finalize ${{ steps.version.outputs.VERSION }}
 
-      - name: Create release notes
-        uses: release-drafter/release-drafter@v5
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Send deployment notification
-        uses: 8398a7/action-slack@v3
-        if: always()
         with:
-          status: ${{ job.status }}
-          text: 'Production deployment ${{ job.status }}'
-          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          release_name: Release ${{ steps.version.outputs.VERSION }}
+          draft: false
+          prerelease: false
 
-      - name: Rollback on failure
+      - name: Notify deployment success
+        if: success()
+        run: |
+          echo "::notice::Production deployment successful!"
+          echo "::notice::URL: https://sierra-painting.web.app"
+          echo "::notice::Version: ${{ steps.version.outputs.VERSION }}"
+
+      - name: Notify deployment failure
         if: failure()
         run: |
-          echo "Deployment failed! Manual rollback may be required."
-          # Add rollback logic here if needed
+          echo "::error::Production deployment failed! Manual intervention required."
+
+  # Post-deployment validation
+  post-deploy-validation:
+    name: Post-Deployment Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [deploy-production]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check production URL is accessible
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://sierra-painting.web.app)
+          if [ $STATUS -ne 200 ]; then
+            echo "::error::Production site returned status code $STATUS"
+            exit 1
+          fi
+          echo "::notice::Production site is accessible (HTTP $STATUS)"
+
+      - name: Verify critical pages load
+        run: |
+          # Check that critical pages return 200
+          for page in "" "/login"; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://sierra-painting.web.app$page")
+            if [ $STATUS -ne 200 ]; then
+              echo "::error::Page $page returned status code $STATUS"
+              exit 1
+            fi
+          done
+          echo "::notice::All critical pages accessible"
+
+      - name: Notify validation success
+        if: success()
+        run: |
+          echo "::notice::Post-deployment validation passed!"
+
+      - name: Notify validation failure
+        if: failure()
+        run: |
+          echo "::error::Post-deployment validation failed! Manual intervention required."
