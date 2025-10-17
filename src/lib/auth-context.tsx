@@ -12,6 +12,8 @@ import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { useAuthStore } from '../store/auth-store';
 import { resetRateLimit } from './rate-limiter';
+import { logger } from '../services/logger';
+import { ErrorHandler } from '../services/errors';
 import type { User, UserRole } from '../types';
 
 interface AuthContextValue {
@@ -38,23 +40,37 @@ export function useAuth() {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const { user, loading, error, setUser, setLoading, setError, clearAuth } = useAuthStore();
 
+  logger.debug('AuthProvider render', {
+    email: user?.email,
+    loading,
+    hasError: !!error,
+  });
+
   // Listen to Firebase auth state changes
   useEffect(() => {
+    logger.debug('Setting up auth state listener');
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
+        logger.info('Auth state changed - user authenticated', {
+          email: firebaseUser.email,
+        });
         try {
           await loadUserData(firebaseUser);
         } catch (err) {
-          console.error('Error loading user data:', err);
-          setError('Failed to load user data');
+          logger.error('Failed to load user data', err as Error);
+          const { message } = ErrorHandler.handle(err);
+          setError(message);
           setLoading(false);
         }
       } else {
+        logger.info('Auth state changed - user signed out');
         clearAuth();
+        logger.clearContext(['userId', 'companyId']);
       }
     });
 
     return () => unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /**
@@ -67,7 +83,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (!userDoc.exists()) {
         // User document doesn't exist yet (newly created user)
-        // Default to worker role until admin assigns proper role
+        // NOTE: For new signups, companyId should be set during onboarding
+        // For now, we'll create a basic user document without companyId
+        logger.warn('Creating user document without companyId', {
+          userId: firebaseUser.uid,
+          email: firebaseUser.email,
+        });
+
         const newUser: User = {
           uid: firebaseUser.uid,
           email: firebaseUser.email!,
@@ -78,18 +100,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           updatedAt: new Date(),
         };
 
-        // Create user document in Firestore
-        await setDoc(userDocRef, {
+        // Create user document in Firestore (filter out undefined values)
+        const userData: any = {
+          uid: firebaseUser.uid,
           email: newUser.email,
-          displayName: newUser.displayName,
-          photoURL: newUser.photoURL,
           role: newUser.role,
+          status: 'pending', // Mark as pending until assigned to company
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
-        });
+        };
+
+        // Only add optional fields if they have values
+        if (newUser.displayName) {
+          userData.displayName = newUser.displayName;
+        }
+        if (newUser.photoURL) {
+          userData.photoURL = newUser.photoURL;
+        }
+
+        logger.info('Creating new user document', { userId: firebaseUser.uid });
+        await setDoc(userDocRef, userData);
 
         setUser(newUser);
         setLoading(false);
+        setError('Your account is pending approval. Please contact your administrator.');
         return;
       }
 
@@ -100,16 +134,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         email: firebaseUser.email!,
         displayName: firebaseUser.displayName || userData.displayName || undefined,
         photoURL: firebaseUser.photoURL || userData.photoURL || undefined,
-        role: userData.role as UserRole || 'worker',
+        role: (userData.role as UserRole) || 'worker',
         companyId: userData.companyId,
         createdAt: userData.createdAt?.toDate(),
         updatedAt: userData.updatedAt?.toDate(),
       };
 
+      // Set logging context for all future logs
+      logger.setContext({
+        userId: fullUser.uid,
+        companyId: fullUser.companyId,
+      });
+
+      logger.info('User data loaded successfully', {
+        email: fullUser.email,
+        role: fullUser.role,
+        hasCompanyId: !!fullUser.companyId,
+      });
+
       setUser(fullUser);
       setLoading(false);
     } catch (err) {
-      console.error('Error in loadUserData:', err);
+      logger.error('Error loading user data', err as Error);
       throw err;
     }
   };
@@ -122,27 +168,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setError(null);
       setLoading(true);
 
+      logger.info('Sign in attempt', { email });
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       await loadUserData(userCredential.user);
 
       // Reset rate limit on successful login
       resetRateLimit(email);
+      logger.trackAction('user_login', { email });
     } catch (err: any) {
-      console.error('Sign in error:', err);
+      logger.error('Sign in failed', err, { email });
+      const { message } = ErrorHandler.handle(err);
 
-      // Map Firebase errors to user-friendly messages
-      let errorMessage = 'Failed to sign in';
-      if (err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
-        errorMessage = 'Invalid email or password';
-      } else if (err.code === 'auth/too-many-requests') {
-        errorMessage = 'Too many failed attempts. Please try again later.';
-      } else if (err.code === 'auth/network-request-failed') {
-        errorMessage = 'Network error. Please check your connection.';
-      }
-
-      setError(errorMessage);
+      setError(message);
       setLoading(false);
-      throw new Error(errorMessage);
+      throw new Error(message);
     }
   };
 
@@ -154,6 +193,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setError(null);
       setLoading(true);
 
+      logger.info('Sign up attempt', { email, hasDisplayName: !!displayName });
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
 
       // Update display name in Firebase Auth
@@ -162,21 +202,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       await loadUserData(userCredential.user);
+      logger.trackAction('user_signup', { email });
     } catch (err: any) {
-      console.error('Sign up error:', err);
+      logger.error('Sign up failed', err, { email });
+      const { message } = ErrorHandler.handle(err);
 
-      let errorMessage = 'Failed to create account';
-      if (err.code === 'auth/email-already-in-use') {
-        errorMessage = 'Email address is already in use';
-      } else if (err.code === 'auth/weak-password') {
-        errorMessage = 'Password is too weak';
-      } else if (err.code === 'auth/network-request-failed') {
-        errorMessage = 'Network error. Please check your connection.';
-      }
-
-      setError(errorMessage);
+      setError(message);
       setLoading(false);
-      throw new Error(errorMessage);
+      throw new Error(message);
     }
   };
 
@@ -185,11 +218,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    */
   const signOut = async () => {
     try {
+      logger.info('Sign out attempt');
       await firebaseSignOut(auth);
       clearAuth();
+      logger.trackAction('user_logout');
     } catch (err) {
-      console.error('Sign out error:', err);
-      setError('Failed to sign out');
+      logger.error('Sign out failed', err as Error);
+      const { message } = ErrorHandler.handle(err);
+      setError(message);
       throw err;
     }
   };
@@ -200,19 +236,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const resetPassword = async (email: string) => {
     try {
       setError(null);
+      logger.info('Password reset request', { email });
       await sendPasswordResetEmail(auth, email);
+      logger.trackAction('password_reset_requested', { email });
     } catch (err: any) {
-      console.error('Password reset error:', err);
+      logger.error('Password reset failed', err, { email });
+      const { message } = ErrorHandler.handle(err);
 
-      let errorMessage = 'Failed to send reset email';
-      if (err.code === 'auth/user-not-found') {
-        errorMessage = 'No account found with this email';
-      } else if (err.code === 'auth/network-request-failed') {
-        errorMessage = 'Network error. Please check your connection.';
-      }
-
-      setError(errorMessage);
-      throw new Error(errorMessage);
+      setError(message);
+      throw new Error(message);
     }
   };
 

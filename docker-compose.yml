@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  # Firebase Emulators for local development
+  firebase-emulators:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+    ports:
+      - "4000:4000"   # Emulator UI
+      - "5001:5001"   # Cloud Functions
+      - "8080:8080"   # Firestore
+      - "9099:9099"   # Auth
+      - "9199:9199"   # Storage
+    command: npm run emulators
+    environment:
+      - NODE_ENV=development
+    networks:
+      - sierra-network
+
+  # Vite Dev Server
+  web:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+    ports:
+      - "5173:5173"   # Vite dev server
+    command: npm run dev
+    environment:
+      - NODE_ENV=development
+      - VITE_USE_FIREBASE_EMULATORS=true
+      - VITE_FIREBASE_EMULATOR_HOST=firebase-emulators
+    env_file:
+      - .env.local
+    depends_on:
+      - firebase-emulators
+    networks:
+      - sierra-network
+
+volumes:
+  node_modules:
+
+networks:
+  sierra-network:
+    driver: bridge
