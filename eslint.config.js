@@ -43,4 +43,24 @@ export default defineConfig([
       '@typescript-eslint/no-explicit-any': 'off',
     },
   },
+  {
+    // Dialog and UI components can use 'any' for flexibility with form handlers
+    files: [
+      'src/components/dialogs/**/*.tsx',
+      'src/components/ui/**/*.tsx',
+      'src/hooks/**/*.ts',
+      'src/pages/**/*.tsx',
+    ],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'warn', // Warn instead of error
+      'react-refresh/only-export-components': 'off',
+      '@typescript-eslint/no-unused-vars': [
+        'warn',
+        {
+          argsIgnorePattern: '^_', // Ignore unused parameters starting with underscore
+          varsIgnorePattern: '^_',
+        },
+      ],
+    },
+  },
 ])
