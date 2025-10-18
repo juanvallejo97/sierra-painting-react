@@ -1,8 +1,9 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import { sentryVitePlugin } from '@sentry/vite-plugin'
-import { visualizer } from 'rollup-plugin-visualizer'
-import { resolve } from 'path'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { sentryVitePlugin } from '@sentry/vite-plugin';
+import { visualizer } from 'rollup-plugin-visualizer';
+import { VitePWA } from 'vite-plugin-pwa';
+import { resolve } from 'path';
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
@@ -26,6 +27,92 @@ export default defineConfig(({ mode }) => {
 
     plugins: [
       react(),
+      // PWA with service worker (Phase 2, Days 9-10)
+      VitePWA({
+        registerType: 'autoUpdate',
+        includeAssets: ['favicon.ico', 'logo.webp', 'logo.jpg'],
+        manifest: {
+          name: "D'Sierra Painting - Invoice Management",
+          short_name: 'Sierra Painting',
+          description: 'Professional painting company invoice and job management system',
+          theme_color: '#1e40af',
+          background_color: '#ffffff',
+          display: 'standalone',
+          orientation: 'portrait',
+          scope: '/',
+          start_url: '/',
+          icons: [
+            {
+              src: '/logo.webp',
+              sizes: '800x800',
+              type: 'image/webp',
+              purpose: 'any maskable',
+            },
+            {
+              src: '/logo.jpg',
+              sizes: '800x800',
+              type: 'image/jpeg',
+              purpose: 'any',
+            },
+          ],
+        },
+        workbox: {
+          // Cache strategy
+          globPatterns: ['**/*.{js,css,html,ico,png,jpg,jpeg,webp,svg,woff,woff2}'],
+          runtimeCaching: [
+            // Cache Firebase API calls
+            {
+              urlPattern: /^https:\/\/firebasestorage\.googleapis\.com\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'firebase-storage-cache',
+                expiration: {
+                  maxEntries: 50,
+                  maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            // Cache Firestore API calls with network-first strategy
+            {
+              urlPattern: /^https:\/\/firestore\.googleapis\.com\/.*/i,
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'firestore-cache',
+                networkTimeoutSeconds: 10,
+                expiration: {
+                  maxEntries: 100,
+                  maxAgeSeconds: 60 * 60 * 24, // 24 hours
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            // Cache other API calls
+            {
+              urlPattern: /^https:\/\/.*\.googleapis\.com\/.*/i,
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'googleapis-cache',
+                networkTimeoutSeconds: 10,
+                expiration: {
+                  maxEntries: 50,
+                  maxAgeSeconds: 60 * 60 * 24, // 24 hours
+                },
+              },
+            },
+          ],
+          cleanupOutdatedCaches: true,
+          skipWaiting: true,
+          clientsClaim: true,
+        },
+        devOptions: {
+          enabled: false, // Disable in dev to avoid conflicts with HMR
+        },
+      }),
       // Sentry source maps (only in production builds)
       ...(isProduction && process.env.SENTRY_AUTH_TOKEN
         ? [
@@ -78,14 +165,81 @@ export default defineConfig(({ mode }) => {
         },
       },
 
-      // Optimize chunks - simplified to prevent loading order issues
+      // Optimize chunks - Firebase tree shaking + vendor splitting
       rollupOptions: {
         output: {
-          // Bundle all vendor code together to ensure proper loading
+          // Manual chunks for optimal code splitting
           manualChunks: (id) => {
-            if (id.includes('node_modules')) {
-              return 'vendor';
+            // Skip non-node_modules files
+            if (!id.includes('node_modules')) {
+              return undefined;
             }
+
+            // Firebase modules - split by service for better caching
+            // Note: Firebase uses @firebase/* scoped packages
+            if (id.includes('/@firebase/firestore') || id.includes('/firebase/firestore')) {
+              return 'firestore';
+            }
+            if (id.includes('/@firebase/auth') || id.includes('/firebase/auth')) {
+              return 'auth';
+            }
+            if (id.includes('/@firebase/storage') || id.includes('/firebase/storage')) {
+              return 'storage';
+            }
+            if (id.includes('/@firebase/analytics') || id.includes('/firebase/analytics')) {
+              return 'analytics';
+            }
+            // Firebase core includes app, app-check, etc.
+            if (id.includes('/@firebase/') || id.includes('/firebase/')) {
+              return 'firebase-core';
+            }
+
+            // React ecosystem - critical path
+            // Match /node_modules/react/ but not react-dom, react-router, etc.
+            if (id.match(/\/node_modules\/react\//) && !id.includes('react-')) {
+              return 'react-vendor';
+            }
+            if (id.includes('/node_modules/react-dom/')) {
+              return 'react-vendor';
+            }
+            if (id.includes('/react-router')) {
+              return 'router';
+            }
+
+            // State management & data fetching
+            if (id.includes('/@tanstack/react-query')) {
+              return 'react-query';
+            }
+            if (id.includes('/zustand/')) {
+              return 'zustand';
+            }
+
+            // UI Component Libraries
+            if (id.includes('/@radix-ui/')) {
+              return 'radix';
+            }
+            if (id.includes('/@mui/')) {
+              return 'mui';
+            }
+            if (id.includes('/lucide-react/')) {
+              return 'icons';
+            }
+
+            // Form handling
+            if (id.includes('/react-hook-form/') || id.includes('/@hookform/')) {
+              return 'forms';
+            }
+            if (id.includes('/zod/')) {
+              return 'zod';
+            }
+
+            // Date libraries
+            if (id.includes('/date-fns/')) {
+              return 'date-fns';
+            }
+
+            // Other vendor modules (fallback for anything else in node_modules)
+            return 'vendor';
           },
 
           // Optimize chunk file names
@@ -108,8 +262,8 @@ export default defineConfig(({ mode }) => {
         },
       },
 
-      // Increase chunk size warning limit for vendor chunks
-      chunkSizeWarningLimit: 1000,
+      // Performance budgets (Phase 2, Day 8)
+      chunkSizeWarningLimit: 1000, // Warn at 1MB chunks
 
       // CSS code splitting
       cssCodeSplit: true,
@@ -126,4 +280,4 @@ export default defineConfig(({ mode }) => {
       open: false,
     },
   };
-})
+});
