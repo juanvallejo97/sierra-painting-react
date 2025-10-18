@@ -69,6 +69,21 @@ jobs:
         with:
           args: --severity-threshold=high
 
+      - name: Run OSV-Scanner
+        uses: google/osv-scanner-action@v1
+        continue-on-error: true
+        with:
+          scan-args: |-
+            --lockfile=package-lock.json
+
+      - name: Upload OSV-Scanner results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: results.sarif
+          category: osv-scanner
+
   # Unit tests
   test-unit:
     name: Unit Tests

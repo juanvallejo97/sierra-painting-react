@@ -62,6 +62,65 @@ interface EnvConfig {
 }
 
 /**
+ * Validate environment variable format
+ */
+function validateFirebaseConfig(): void {
+  const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
+  const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
+  const authDomain = import.meta.env.VITE_FIREBASE_AUTH_DOMAIN;
+
+  // Firebase API keys should start with "AIza"
+  if (apiKey && !apiKey.startsWith('AIza')) {
+    logger.warn('Firebase API key format may be invalid (expected to start with AIza)');
+  }
+
+  // Auth domain should match project ID
+  if (authDomain && projectId && !authDomain.includes(projectId)) {
+    logger.warn(`Auth domain (${authDomain}) does not match project ID (${projectId})`);
+  }
+
+  // Storage bucket should match project ID
+  const storageBucket = import.meta.env.VITE_FIREBASE_STORAGE_BUCKET;
+  if (storageBucket && projectId && !storageBucket.includes(projectId)) {
+    logger.warn(`Storage bucket (${storageBucket}) does not match project ID (${projectId})`);
+  }
+}
+
+/**
+ * Validate production environment security
+ */
+function validateProductionSecurity(env: string): void {
+  if (env !== 'production') return;
+
+  const warnings: string[] = [];
+
+  // Production should not use emulators
+  if (parseBool(import.meta.env.VITE_USE_FIREBASE_EMULATORS)) {
+    warnings.push('Firebase emulators are enabled in production');
+  }
+
+  // Production should have Sentry configured
+  if (!import.meta.env.VITE_SENTRY_DSN) {
+    warnings.push('Sentry DSN not configured for production error tracking');
+  }
+
+  // Production should have analytics enabled
+  if (!parseBool(import.meta.env.VITE_FEATURE_ANALYTICS, true)) {
+    warnings.push('Analytics disabled in production');
+  }
+
+  // Production API should use HTTPS
+  const apiUrl = import.meta.env.VITE_API_URL;
+  if (apiUrl && !apiUrl.startsWith('https://')) {
+    warnings.push('Production API URL should use HTTPS');
+  }
+
+  if (warnings.length > 0) {
+    logger.warn('Production security warnings:', { warnings });
+  }
+}
+
+/**
  * Validate required environment variables
  */
 function validateEnvironment(): void {
@@ -78,6 +137,10 @@ function validateEnvironment(): void {
     logger.critical(errorMessage);
     throw new Error(errorMessage);
   }
+
+  // Additional validation
+  validateFirebaseConfig();
+  validateProductionSecurity(import.meta.env.VITE_ENV || 'development');
 }
 
 /**
