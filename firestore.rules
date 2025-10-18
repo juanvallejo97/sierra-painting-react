@@ -1,281 +1,93 @@
 rules_version = '2';
 
+/**
+ * Sierra Painting - Firestore Security Rules
+ * Version: 2.0.0 (Custom Claims Based)
+ *
+ * SECURITY MODEL:
+ * - Authorization is based on Firebase Auth custom claims (request.auth.token)
+ * - Custom claims are the SINGLE SOURCE OF TRUTH for role and companyId
+ * - User profile documents in Firestore are for display purposes only
+ * - All queries MUST be scoped by companyId to enforce multi-tenancy
+ *
+ * NEVER read role or companyId from Firestore documents for authorization!
+ *
+ * @see functions/src/triggers/auth.ts for custom claims implementation
+ */
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
     // ========================================
-    // Helper Functions
+    // Helper Functions (Claims-Based)
     // ========================================
 
-    // Check if user is authenticated
-    function isAuthenticated() {
+    /**
+     * Check if user is authenticated
+     */
+    function isSignedIn() {
       return request.auth != null && request.auth.uid != null;
     }
 
-    // Check if user document exists in Firestore
-    function userExists() {
-      return isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    /**
+     * Check if user has a specific role (from custom claims)
+     * @param role - Role to check (admin, manager, worker, etc.)
+     */
+    function hasRole(role) {
+      return isSignedIn()
+        && request.auth.token.role != null
+        && request.auth.token.role == role;
     }
 
-    // Get user data safely (only call if userExists() is true)
-    function getUserData() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-    }
-
-    // Check if user has a companyId
-    function hasCompanyId() {
-      return userExists() && 'companyId' in getUserData() && getUserData().companyId != null;
-    }
-
-    // Check if a resource belongs to the user's company
-    function belongsToUserCompany(companyId) {
-      return hasCompanyId() && getUserData().companyId == companyId;
-    }
-
-    // Check if user is admin
+    /**
+     * Check if user is an admin (from custom claims)
+     */
     function isAdmin() {
-      return userExists() && hasCompanyId() && getUserData().role == 'admin';
+      return hasRole('admin');
     }
 
-    // Check if user is manager or admin
+    /**
+     * Check if user is a manager or admin (from custom claims)
+     */
     function isManager() {
-      return userExists() && hasCompanyId() && (getUserData().role == 'manager' || getUserData().role == 'admin');
+      return isSignedIn()
+        && request.auth.token.role != null
+        && (request.auth.token.role == 'manager' || request.auth.token.role == 'admin');
     }
 
-    // Check if user is worker
-    function isWorker() {
-      return userExists() && hasCompanyId() && getUserData().role == 'worker';
+    /**
+     * Get user's company ID from custom claims
+     * @return companyId string or null
+     */
+    function userCompany() {
+      return request.auth.token.companyId;
     }
 
-    // Check if user is accessing their own document
+    /**
+     * Check if a document belongs to the user's company
+     * @param docCompanyId - The companyId field from the document
+     */
+    function belongsToCompany(docCompanyId) {
+      return isSignedIn()
+        && userCompany() != null
+        && userCompany() == docCompanyId;
+    }
+
+    /**
+     * Check if user is accessing their own document
+     * @param userId - User ID to check
+     */
     function isSelf(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
+      return isSignedIn() && request.auth.uid == userId;
     }
 
-    // ========================================
-    // Users Collection
-    // ========================================
-    match /users/{userId} {
-      // Users can always read their own document
-      allow read: if isAuthenticated() && isSelf(userId);
-
-      // Admins and managers can read all users in their company
-      allow read: if isAuthenticated()
-                  && userExists()
-                  && isManager()
-                  && 'companyId' in resource.data
-                  && belongsToUserCompany(resource.data.companyId);
-
-      // Allow creating own user document during signup
-      // Must match authenticated user and include required fields
-      allow create: if isAuthenticated()
-                    && isSelf(userId)
-                    && request.resource.data.uid == userId
-                    && request.resource.data.uid == request.auth.uid
-                    && request.resource.data.email == request.auth.token.email;
-
-      // Admins can create user documents for invitations
-      allow create: if isAuthenticated()
-                    && userExists()
-                    && isAdmin()
-                    && request.resource.data.companyId == getUserData().companyId;
-
-      // Users can update their own profile
-      allow update: if isAuthenticated()
-                    && isSelf(userId)
-                    && request.resource.data.uid == resource.data.uid
-                    && request.resource.data.email == resource.data.email;
-
-      // Admins can update users in their company
-      allow update: if isAuthenticated()
-                    && userExists()
-                    && isAdmin()
-                    && (
-                      ('companyId' in resource.data && belongsToUserCompany(resource.data.companyId))
-                      || (!('companyId' in resource.data) && request.resource.data.companyId == getUserData().companyId)
-                    );
-
-      // Admins can delete users in their company
-      allow delete: if isAuthenticated()
-                    && userExists()
-                    && isAdmin()
-                    && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId);
-    }
-
-    // ========================================
-    // Jobs Collection
-    // ========================================
-    match /jobs/{jobId} {
-      // Allow authenticated users to read jobs in their company
-      allow read: if isAuthenticated()
-                  && userExists()
-                  && 'companyId' in resource.data
-                  && belongsToUserCompany(resource.data.companyId);
-
-      // Workers can only read jobs they're assigned to
-      allow read: if isAuthenticated()
-                  && userExists()
-                  && isWorker()
-                  && 'companyId' in resource.data
-                  && belongsToUserCompany(resource.data.companyId)
-                  && 'workers' in resource.data
-                  && request.auth.uid in resource.data.workers;
-
-      // Allow authenticated users to create jobs in their company
-      allow create: if isAuthenticated()
-                    && request.resource.data.keys().hasAll(['name', 'companyId', 'status', 'createdAt', 'updatedAt'])
-                    && (
-                      (userExists() && hasCompanyId() && request.resource.data.companyId == getUserData().companyId)
-                      || (!userExists() || !hasCompanyId())
-                    );
-
-      // Managers and admins can update jobs in their company
-      allow update: if isAuthenticated()
-                    && userExists()
-                    && isManager()
-                    && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId)
-                    && request.resource.data.companyId == resource.data.companyId;
-
-      // Only admins can delete jobs
-      allow delete: if isAuthenticated()
-                    && userExists()
-                    && isAdmin()
-                    && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId);
-    }
-
-    // ========================================
-    // Invoices Collection
-    // ========================================
-    match /invoices/{invoiceId} {
-      // Authenticated users can read invoices in their company
-      allow read: if isAuthenticated()
-                  && userExists()
-                  && 'companyId' in resource.data
-                  && belongsToUserCompany(resource.data.companyId);
-
-      // Allow authenticated users to create invoices
-      allow create: if isAuthenticated()
-                    && request.resource.data.keys().hasAll(['invoiceNumber', 'companyId', 'status', 'createdAt', 'updatedAt'])
-                    && (
-                      (userExists() && hasCompanyId() && request.resource.data.companyId == getUserData().companyId)
-                      || (!userExists() || !hasCompanyId())
-                    );
-
-      // Managers and admins can update invoices in their company
-      allow update: if isAuthenticated()
-                    && userExists()
-                    && isManager()
-                    && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId)
-                    && request.resource.data.companyId == resource.data.companyId;
-
-      // Only admins can delete invoices
-      allow delete: if isAuthenticated()
-                    && userExists()
-                    && isAdmin()
-                    && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId);
-    }
-
-    // ========================================
-    // Estimates Collection
-    // ========================================
-    match /estimates/{estimateId} {
-      // Authenticated users can read estimates in their company
-      allow read: if isAuthenticated()
-                  && userExists()
-                  && 'companyId' in resource.data
-                  && belongsToUserCompany(resource.data.companyId);
-
-      // Allow authenticated users to create estimates
-      allow create: if isAuthenticated()
-                    && request.resource.data.keys().hasAll(['estimateNumber', 'companyId', 'status', 'createdAt', 'updatedAt'])
-                    && (
-                      (userExists() && hasCompanyId() && request.resource.data.companyId == getUserData().companyId)
-                      || (!userExists() || !hasCompanyId())
-                    );
-
-      // Managers and admins can update estimates in their company
-      allow update: if isAuthenticated()
-                    && userExists()
-                    && isManager()
-                    && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId)
-                    && request.resource.data.companyId == resource.data.companyId;
-
-      // Only admins can delete estimates
-      allow delete: if isAuthenticated()
-                    && userExists()
-                    && isAdmin()
-                    && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId);
-    }
-
-    // ========================================
-    // Time Entries Collection
-    // ========================================
-    match /timeEntries/{entryId} {
-      // Workers can read their own time entries
-      allow read: if isAuthenticated()
-                  && userExists()
-                  && 'companyId' in resource.data
-                  && 'userId' in resource.data
-                  && belongsToUserCompany(resource.data.companyId)
-                  && isSelf(resource.data.userId);
-
-      // Managers and admins can read all time entries in their company
-      allow read: if isAuthenticated()
-                  && userExists()
-                  && isManager()
-                  && 'companyId' in resource.data
-                  && belongsToUserCompany(resource.data.companyId);
-
-      // Workers can create their own time entries
-      allow create: if isAuthenticated()
-                    && userExists()
-                    && hasCompanyId()
-                    && request.resource.data.companyId == getUserData().companyId
-                    && request.resource.data.userId == request.auth.uid
-                    && request.resource.data.keys().hasAll(['userId', 'companyId', 'date', 'status', 'createdAt', 'updatedAt']);
-
-      // Workers can update only their own pending time entries
-      allow update: if isAuthenticated()
-                    && userExists()
-                    && 'companyId' in resource.data
-                    && 'userId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId)
-                    && isSelf(resource.data.userId)
-                    && resource.data.status == 'pending'
-                    && request.resource.data.userId == resource.data.userId
-                    && request.resource.data.companyId == resource.data.companyId;
-
-      // Managers can update any time entry in their company
-      allow update: if isAuthenticated()
-                    && userExists()
-                    && isManager()
-                    && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId)
-                    && request.resource.data.userId == resource.data.userId
-                    && request.resource.data.companyId == resource.data.companyId;
-
-      // Workers can delete only their own pending time entries
-      allow delete: if isAuthenticated()
-                    && userExists()
-                    && 'companyId' in resource.data
-                    && 'userId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId)
-                    && isSelf(resource.data.userId)
-                    && resource.data.status == 'pending';
-
-      // Admins can delete any time entry in their company
-      allow delete: if isAuthenticated()
-                    && userExists()
-                    && isAdmin()
-                    && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId);
+    /**
+     * Check if user has an active (non-pending) role
+     */
+    function isActive() {
+      return isSignedIn()
+        && request.auth.token.role != null
+        && request.auth.token.role != 'pending';
     }
 
     // ========================================
@@ -283,264 +95,225 @@ service cloud.firestore {
     // ========================================
     match /companies/{companyId} {
       // Users can read their own company
-      allow read: if isAuthenticated()
-                  && userExists()
-                  && belongsToUserCompany(companyId);
+      allow read: if belongsToCompany(companyId);
 
-      // Authenticated users can create a company (for initial setup)
-      allow create: if isAuthenticated()
+      // Authenticated users can create a company during onboarding
+      allow create: if isSignedIn()
                     && request.resource.data.keys().hasAll(['id', 'name', 'createdAt', 'updatedAt'])
                     && request.resource.data.id == companyId;
 
       // Only admins can update their company
-      allow update: if isAuthenticated()
-                    && userExists()
-                    && isAdmin()
-                    && belongsToUserCompany(companyId);
+      allow update: if isAdmin() && belongsToCompany(companyId);
 
-      // Only admins can delete their company
-      allow delete: if isAuthenticated()
-                    && userExists()
-                    && isAdmin()
-                    && belongsToUserCompany(companyId);
+      // Only admins can delete their company (soft delete recommended)
+      allow delete: if isAdmin() && belongsToCompany(companyId);
     }
 
     // ========================================
-    // Audit Logs Collection
+    // Users Collection (Profile Data + CompanyId)
     // ========================================
-    match /auditLogs/{logId} {
-      // Only admins can read audit logs in their company
-      allow read: if isAuthenticated()
-                  && userExists()
-                  && isAdmin()
+    match /users/{userId} {
+      // Users can always read their own profile
+      allow read: if isSelf(userId);
+
+      // Admins and managers can read users in their company
+      // Phase 0: User documents MUST have companyId for multi-tenant isolation
+      allow read: if isManager() && belongsToCompany(resource.data.companyId);
+
+      // Users can create their own profile during signup
+      // Phase 0 Security Model:
+      // - role: FORBIDDEN (only in custom claims, never in document)
+      // - companyId: ALLOWED (needed for multi-tenant isolation in rules)
+      allow create: if isSignedIn()
+                    && isSelf(userId)
+                    && !('role' in request.resource.data);  // role forbidden
+
+      // Users can update their own profile (display data only)
+      // CANNOT change email (use Firebase Auth updateEmail())
+      // CANNOT change companyId (immutable after set)
+      allow update: if isSelf(userId)
+                    && !('role' in request.resource.data)
+                    && (!('email' in request.resource.data)
+                        || request.resource.data.email == resource.data.email)
+                    && (!('companyId' in request.resource.data)
+                        || request.resource.data.companyId == resource.data.companyId);
+
+      // Admins can update user profiles (but not role/email)
+      // CANNOT change email or companyId (immutable)
+      allow update: if isAdmin()
+                    && !('role' in request.resource.data)
+                    && (!('email' in request.resource.data)
+                        || request.resource.data.email == resource.data.email)
+                    && (!('companyId' in request.resource.data)
+                        || request.resource.data.companyId == resource.data.companyId);
+
+      // Only admins can delete users IN THEIR COMPANY
+      // Phase 0: Multi-tenant isolation requires company check
+      allow delete: if isAdmin() && belongsToCompany(resource.data.companyId);
+    }
+
+    // ========================================
+    // Jobs Collection
+    // ========================================
+    match /jobs/{jobId} {
+      // Managers and admins can read all jobs in their company
+      allow read: if isManager()
                   && 'companyId' in resource.data
-                  && belongsToUserCompany(resource.data.companyId);
+                  && belongsToCompany(resource.data.companyId);
 
-      // Authenticated users can create audit logs
-      // (system creates these automatically)
-      allow create: if isAuthenticated()
-                    && userExists()
-                    && hasCompanyId()
-                    && request.resource.data.companyId == getUserData().companyId
-                    && request.resource.data.userId == request.auth.uid
-                    && request.resource.data.keys().hasAll(['eventType', 'severity', 'userId', 'userEmail', 'companyId', 'timestamp']);
+      // Workers can only read jobs they are assigned to
+      allow read: if isActive()
+                  && !isManager()
+                  && 'companyId' in resource.data
+                  && belongsToCompany(resource.data.companyId)
+                  && request.auth.uid in resource.data.workers;
 
-      // Nobody can update audit logs (immutable)
-      allow update: if false;
+      // Managers and admins can create jobs
+      allow create: if isManager()
+                    && request.resource.data.keys().hasAll(['name', 'companyId', 'status', 'createdAt', 'updatedAt'])
+                    && belongsToCompany(request.resource.data.companyId);
 
-      // Only admins can delete old audit logs (for retention policy)
-      allow delete: if isAuthenticated()
-                    && userExists()
-                    && isAdmin()
+      // Managers and admins can update jobs in their company
+      allow update: if isManager()
                     && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId);
+                    && belongsToCompany(resource.data.companyId)
+                    && request.resource.data.companyId == resource.data.companyId;
+
+      // Only admins can delete jobs
+      allow delete: if isAdmin()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId);
     }
 
     // ========================================
-    // Notifications Collection
+    // Invoices Collection
     // ========================================
-    match /notifications/{notificationId} {
-      // Users can only read their own notifications
-      allow read: if isAuthenticated()
+    match /invoices/{invoiceId} {
+      // Active users can read invoices in their company
+      allow read: if isActive()
+                  && 'companyId' in resource.data
+                  && belongsToCompany(resource.data.companyId);
+
+      // Managers and admins can create invoices
+      allow create: if isManager()
+                    && request.resource.data.keys().hasAll(['invoiceNumber', 'companyId', 'status', 'createdAt', 'updatedAt'])
+                    && belongsToCompany(request.resource.data.companyId);
+
+      // Managers and admins can update invoices in their company
+      allow update: if isManager()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId)
+                    && request.resource.data.companyId == resource.data.companyId;
+
+      // Only admins can delete invoices
+      allow delete: if isAdmin()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId);
+    }
+
+    // ========================================
+    // Estimates Collection
+    // ========================================
+    match /estimates/{estimateId} {
+      // Active users can read estimates in their company
+      allow read: if isActive()
+                  && 'companyId' in resource.data
+                  && belongsToCompany(resource.data.companyId);
+
+      // Managers and admins can create estimates
+      allow create: if isManager()
+                    && request.resource.data.keys().hasAll(['estimateNumber', 'companyId', 'status', 'createdAt', 'updatedAt'])
+                    && belongsToCompany(request.resource.data.companyId);
+
+      // Managers and admins can update estimates in their company
+      allow update: if isManager()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId)
+                    && request.resource.data.companyId == resource.data.companyId;
+
+      // Only admins can delete estimates
+      allow delete: if isAdmin()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId);
+    }
+
+    // ========================================
+    // Employees Collection
+    // ========================================
+    match /employees/{employeeId} {
+      // All active users can read employees in their company
+      allow read: if isActive()
+                  && 'companyId' in resource.data
+                  && belongsToCompany(resource.data.companyId);
+
+      // Managers and admins can create employees
+      allow create: if isManager()
+                    && request.resource.data.keys().hasAll(['name', 'email', 'companyId', 'createdAt', 'updatedAt'])
+                    && belongsToCompany(request.resource.data.companyId);
+
+      // Managers and admins can update employees in their company
+      allow update: if isManager()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId)
+                    && request.resource.data.companyId == resource.data.companyId;
+
+      // Only admins can delete employees
+      allow delete: if isAdmin()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId);
+    }
+
+    // ========================================
+    // Time Entries Collection
+    // ========================================
+    match /timeEntries/{entryId} {
+      // Workers can read their own time entries
+      allow read: if isActive()
+                  && 'companyId' in resource.data
                   && 'userId' in resource.data
+                  && belongsToCompany(resource.data.companyId)
                   && isSelf(resource.data.userId);
 
-      // System can create notifications for users in the company
-      // (typically created by backend/cloud functions, but also allow client-side)
-      allow create: if isAuthenticated()
-                    && userExists()
-                    && hasCompanyId()
-                    && request.resource.data.companyId == getUserData().companyId
-                    && request.resource.data.keys().hasAll(['type', 'priority', 'userId', 'companyId', 'title', 'message', 'read', 'archived', 'createdAt']);
-
-      // Users can update their own notifications (mark as read, archive)
-      allow update: if isAuthenticated()
-                    && 'userId' in resource.data
-                    && isSelf(resource.data.userId)
-                    && request.resource.data.userId == resource.data.userId;
-
-      // Users can delete their own notifications
-      allow delete: if isAuthenticated()
-                    && 'userId' in resource.data
-                    && isSelf(resource.data.userId);
-
-      // Admins can delete any notification in their company
-      allow delete: if isAuthenticated()
-                    && userExists()
-                    && isAdmin()
-                    && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId);
-    }
-
-    // ========================================
-    // Notification Preferences Collection
-    // ========================================
-    match /notificationPreferences/{userId} {
-      // Users can read their own preferences
-      allow read: if isAuthenticated() && isSelf(userId);
-
-      // Users can create their own preferences
-      allow create: if isAuthenticated()
-                    && isSelf(userId)
-                    && request.resource.data.userId == userId;
-
-      // Users can update their own preferences
-      allow update: if isAuthenticated() && isSelf(userId);
-
-      // Users can delete their own preferences
-      allow delete: if isAuthenticated() && isSelf(userId);
-    }
-
-    // ========================================
-    // Activity Feed Collection
-    // ========================================
-    match /activityFeed/{activityId} {
-      // Users can read activities in their company
-      allow read: if isAuthenticated()
-                  && userExists()
+      // Managers and admins can read all time entries in their company
+      allow read: if isManager()
                   && 'companyId' in resource.data
-                  && belongsToUserCompany(resource.data.companyId);
+                  && belongsToCompany(resource.data.companyId);
 
-      // System can create activity logs
-      // (typically created automatically when actions occur)
-      allow create: if isAuthenticated()
-                    && userExists()
-                    && hasCompanyId()
-                    && request.resource.data.companyId == getUserData().companyId
+      // Workers can create their own time entries
+      allow create: if isActive()
+                    && request.resource.data.companyId == userCompany()
                     && request.resource.data.userId == request.auth.uid
-                    && request.resource.data.keys().hasAll(['type', 'userId', 'userEmail', 'userName', 'companyId', 'title', 'description', 'timestamp']);
+                    && request.resource.data.keys().hasAll(['userId', 'companyId', 'date', 'status', 'createdAt', 'updatedAt']);
 
-      // Activity logs are immutable (cannot be updated)
-      allow update: if false;
-
-      // Only admins can delete activity logs
-      allow delete: if isAuthenticated()
-                    && userExists()
-                    && isAdmin()
+      // Workers can update only their own pending time entries
+      allow update: if isActive()
                     && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId);
-    }
-
-    // ========================================
-    // Job Assignments Collection (Scheduler)
-    // ========================================
-    match /jobAssignments/{assignmentId} {
-      // All authenticated users can read assignments in their company
-      allow read: if isAuthenticated()
-                  && userExists()
-                  && 'companyId' in resource.data
-                  && belongsToUserCompany(resource.data.companyId);
-
-      // Managers and admins can create assignments
-      allow create: if isAuthenticated()
-                    && userExists()
-                    && isManager()
-                    && request.resource.data.companyId == getUserData().companyId
-                    && request.resource.data.keys().hasAll(['jobId', 'employeeId', 'assignedDate', 'companyId', 'createdAt', 'updatedAt']);
-
-      // Managers and admins can update assignments in their company
-      allow update: if isAuthenticated()
-                    && userExists()
-                    && isManager()
-                    && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId)
-                    && request.resource.data.companyId == resource.data.companyId;
-
-      // Managers and admins can delete assignments
-      allow delete: if isAuthenticated()
-                    && userExists()
-                    && isManager()
-                    && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId);
-    }
-
-    // ========================================
-    // Crew Templates Collection
-    // ========================================
-    match /crewTemplates/{templateId} {
-      // All authenticated users can read templates in their company
-      allow read: if isAuthenticated()
-                  && userExists()
-                  && 'companyId' in resource.data
-                  && belongsToUserCompany(resource.data.companyId);
-
-      // Managers and admins can create templates
-      allow create: if isAuthenticated()
-                    && userExists()
-                    && isManager()
-                    && request.resource.data.companyId == getUserData().companyId
-                    && request.resource.data.keys().hasAll(['name', 'companyId', 'createdAt', 'updatedAt']);
-
-      // Managers and admins can update templates in their company
-      allow update: if isAuthenticated()
-                    && userExists()
-                    && isManager()
-                    && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId)
-                    && request.resource.data.companyId == resource.data.companyId;
-
-      // Managers and admins can delete templates
-      allow delete: if isAuthenticated()
-                    && userExists()
-                    && isManager()
-                    && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId);
-    }
-
-    // ========================================
-    // Time Off Requests Collection
-    // ========================================
-    match /timeOffRequests/{requestId} {
-      // Workers can read their own requests
-      allow read: if isAuthenticated()
-                  && userExists()
-                  && 'employeeId' in resource.data
-                  && isSelf(resource.data.employeeId);
-
-      // Managers and admins can read all requests in their company
-      allow read: if isAuthenticated()
-                  && userExists()
-                  && isManager()
-                  && 'companyId' in resource.data
-                  && belongsToUserCompany(resource.data.companyId);
-
-      // Workers can create their own time off requests
-      allow create: if isAuthenticated()
-                    && userExists()
-                    && hasCompanyId()
-                    && request.resource.data.companyId == getUserData().companyId
-                    && request.resource.data.employeeId == request.auth.uid
-                    && request.resource.data.keys().hasAll(['employeeId', 'companyId', 'startDate', 'endDate', 'status', 'createdAt', 'updatedAt']);
-
-      // Workers can update their own pending requests
-      allow update: if isAuthenticated()
-                    && userExists()
-                    && 'employeeId' in resource.data
-                    && isSelf(resource.data.employeeId)
+                    && 'userId' in resource.data
+                    && belongsToCompany(resource.data.companyId)
+                    && isSelf(resource.data.userId)
                     && resource.data.status == 'pending'
-                    && request.resource.data.employeeId == resource.data.employeeId;
-
-      // Managers can update any request in their company (for approval/rejection)
-      allow update: if isAuthenticated()
-                    && userExists()
-                    && isManager()
-                    && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId)
+                    && request.resource.data.userId == resource.data.userId
                     && request.resource.data.companyId == resource.data.companyId;
 
-      // Workers can delete their own pending requests
-      allow delete: if isAuthenticated()
-                    && userExists()
-                    && 'employeeId' in resource.data
-                    && isSelf(resource.data.employeeId)
+      // Managers can update any time entry in their company
+      allow update: if isManager()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId)
+                    && request.resource.data.userId == resource.data.userId
+                    && request.resource.data.companyId == resource.data.companyId;
+
+      // Workers can delete only their own pending time entries
+      allow delete: if isActive()
+                    && 'companyId' in resource.data
+                    && 'userId' in resource.data
+                    && belongsToCompany(resource.data.companyId)
+                    && isSelf(resource.data.userId)
                     && resource.data.status == 'pending';
 
-      // Managers can delete any request in their company
-      allow delete: if isAuthenticated()
-                    && userExists()
-                    && isManager()
+      // Admins can delete any time entry in their company
+      allow delete: if isAdmin()
                     && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId);
+                    && belongsToCompany(resource.data.companyId);
     }
 
     // ========================================
@@ -548,47 +321,216 @@ service cloud.firestore {
     // ========================================
     match /timeClockEntries/{entryId} {
       // Managers and admins can read all time clock entries in their company
-      allow read: if isAuthenticated()
-                  && userExists()
-                  && isManager();
+      allow read: if isManager()
+                  && 'companyId' in resource.data
+                  && belongsToCompany(resource.data.companyId);
 
       // Workers can read their own time clock entries
-      allow read: if isAuthenticated()
-                  && userExists()
+      allow read: if isActive()
                   && 'employeeId' in resource.data
-                  && isSelf(resource.data.employeeId);
+                  && isSelf(resource.data.employeeId)
+                  && 'companyId' in resource.data
+                  && belongsToCompany(resource.data.companyId);
 
-      // Managers and admins can create time clock entries for any employee in their company
-      allow create: if isAuthenticated()
-                    && userExists()
-                    && isManager()
-                    && hasCompanyId()
-                    && request.resource.data.companyId == getUserData().companyId
+      // Managers and admins can create time clock entries for any employee
+      allow create: if isManager()
+                    && request.resource.data.companyId == userCompany()
                     && 'employeeId' in request.resource.data
                     && 'action' in request.resource.data
-                    && 'timestamp' in request.resource.data
-                    && 'companyId' in request.resource.data;
+                    && 'timestamp' in request.resource.data;
 
       // Workers can create their own time clock entries
-      allow create: if isAuthenticated()
-                    && userExists()
-                    && hasCompanyId()
-                    && request.resource.data.companyId == getUserData().companyId
+      allow create: if isActive()
+                    && request.resource.data.companyId == userCompany()
                     && request.resource.data.employeeId == request.auth.uid
-                    && 'employeeId' in request.resource.data
                     && 'action' in request.resource.data
-                    && 'timestamp' in request.resource.data
-                    && 'companyId' in request.resource.data;
+                    && 'timestamp' in request.resource.data;
 
-      // Workers cannot update time clock entries (immutable)
+      // Time clock entries are immutable (no updates)
       allow update: if false;
 
       // Only admins can delete time clock entries
-      allow delete: if isAuthenticated()
-                    && userExists()
-                    && isAdmin()
+      allow delete: if isAdmin()
                     && 'companyId' in resource.data
-                    && belongsToUserCompany(resource.data.companyId);
+                    && belongsToCompany(resource.data.companyId);
+    }
+
+    // ========================================
+    // Notifications Collection
+    // ========================================
+    match /notifications/{notificationId} {
+      // Users can only read their own notifications
+      allow read: if isSignedIn()
+                  && 'userId' in resource.data
+                  && isSelf(resource.data.userId);
+
+      // System can create notifications for users
+      allow create: if isActive()
+                    && request.resource.data.companyId == userCompany()
+                    && request.resource.data.keys().hasAll(['type', 'priority', 'userId', 'companyId', 'title', 'message', 'read', 'archived', 'createdAt']);
+
+      // Users can update their own notifications (mark as read, archive)
+      allow update: if isSignedIn()
+                    && 'userId' in resource.data
+                    && isSelf(resource.data.userId)
+                    && request.resource.data.userId == resource.data.userId;
+
+      // Users can delete their own notifications
+      allow delete: if isSignedIn()
+                    && 'userId' in resource.data
+                    && isSelf(resource.data.userId);
+
+      // Admins can delete any notification in their company
+      allow delete: if isAdmin()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId);
+    }
+
+    // ========================================
+    // Audit Logs Collection
+    // ========================================
+    match /auditLogs/{logId} {
+      // Only admins can read audit logs in their company
+      allow read: if isAdmin()
+                  && 'companyId' in resource.data
+                  && belongsToCompany(resource.data.companyId);
+
+      // Active users can create audit logs
+      allow create: if isActive()
+                    && request.resource.data.companyId == userCompany()
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.keys().hasAll(['eventType', 'severity', 'userId', 'userEmail', 'companyId', 'timestamp']);
+
+      // Audit logs are immutable (no updates)
+      allow update: if false;
+
+      // Only admins can delete old audit logs (for retention policy)
+      allow delete: if isAdmin()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId);
+    }
+
+    // ========================================
+    // Job Assignments, Crew Templates, Time Off Requests
+    // (Following the same pattern)
+    // ========================================
+
+    match /jobAssignments/{assignmentId} {
+      allow read: if isActive()
+                  && 'companyId' in resource.data
+                  && belongsToCompany(resource.data.companyId);
+
+      allow create: if isManager()
+                    && request.resource.data.companyId == userCompany()
+                    && request.resource.data.keys().hasAll(['jobId', 'employeeId', 'assignedDate', 'companyId', 'createdAt', 'updatedAt']);
+
+      allow update: if isManager()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId)
+                    && request.resource.data.companyId == resource.data.companyId;
+
+      allow delete: if isManager()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId);
+    }
+
+    match /crewTemplates/{templateId} {
+      allow read: if isActive()
+                  && 'companyId' in resource.data
+                  && belongsToCompany(resource.data.companyId);
+
+      allow create: if isManager()
+                    && request.resource.data.companyId == userCompany()
+                    && request.resource.data.keys().hasAll(['name', 'companyId', 'createdAt', 'updatedAt']);
+
+      allow update: if isManager()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId)
+                    && request.resource.data.companyId == resource.data.companyId;
+
+      allow delete: if isManager()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId);
+    }
+
+    match /timeOffRequests/{requestId} {
+      // Workers can read their own requests
+      allow read: if isActive()
+                  && 'employeeId' in resource.data
+                  && isSelf(resource.data.employeeId);
+
+      // Managers can read all requests in their company
+      allow read: if isManager()
+                  && 'companyId' in resource.data
+                  && belongsToCompany(resource.data.companyId);
+
+      // Workers can create their own time off requests
+      allow create: if isActive()
+                    && request.resource.data.companyId == userCompany()
+                    && request.resource.data.employeeId == request.auth.uid
+                    && request.resource.data.keys().hasAll(['employeeId', 'companyId', 'startDate', 'endDate', 'status', 'createdAt', 'updatedAt']);
+
+      // Workers can update their own pending requests
+      allow update: if isActive()
+                    && 'employeeId' in resource.data
+                    && isSelf(resource.data.employeeId)
+                    && resource.data.status == 'pending'
+                    && request.resource.data.employeeId == resource.data.employeeId;
+
+      // Managers can update any request in their company (for approval/rejection)
+      allow update: if isManager()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId)
+                    && request.resource.data.companyId == resource.data.companyId;
+
+      // Workers can delete their own pending requests
+      allow delete: if isActive()
+                    && 'employeeId' in resource.data
+                    && isSelf(resource.data.employeeId)
+                    && resource.data.status == 'pending';
+
+      // Managers can delete any request in their company
+      allow delete: if isManager()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId);
+    }
+
+    // Remaining collections follow the same pattern...
+    // Activity Feed, Notification Preferences, etc.
+
+    match /activityFeed/{activityId} {
+      allow read: if isActive()
+                  && 'companyId' in resource.data
+                  && belongsToCompany(resource.data.companyId);
+
+      allow create: if isActive()
+                    && request.resource.data.companyId == userCompany()
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.keys().hasAll(['type', 'userId', 'userEmail', 'userName', 'companyId', 'title', 'description', 'timestamp']);
+
+      allow update: if false; // Immutable
+
+      allow delete: if isAdmin()
+                    && 'companyId' in resource.data
+                    && belongsToCompany(resource.data.companyId);
+    }
+
+    match /notificationPreferences/{userId} {
+      allow read: if isSelf(userId);
+      allow create: if isSelf(userId) && request.resource.data.userId == userId;
+      allow update: if isSelf(userId);
+      allow delete: if isSelf(userId);
+    }
+
+    // ========================================
+    // Invoice Counters Collection (Server-Side Only)
+    // ========================================
+    // This collection is managed exclusively by Cloud Functions
+    // to prevent race conditions in invoice number generation.
+    // Clients should NEVER directly access this collection.
+    match /invoiceCounters/{counterId} {
+      allow read: if false;   // No client reads
+      allow write: if false;  // No client writes (only Cloud Functions)
     }
   }
 }

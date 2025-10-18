@@ -12,7 +12,8 @@ import {
   serverTimestamp,
   orderBy,
 } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../lib/firebase';
 import { useAuth } from '../lib/auth-context';
 
 // Re-export types from centralized types file
@@ -78,26 +79,19 @@ export interface UpdateInvoiceData extends Partial<CreateInvoiceData> {
 }
 
 /**
- * Generate invoice number in format: INV-YYYYMM-XXXX
+ * Generate invoice number using Cloud Function (server-side)
+ * Format: INV-YYYYMM-XXXX
+ *
+ * This prevents race conditions by using Firestore transactions on the server.
  */
 async function generateInvoiceNumber(companyId: string): Promise<string> {
-  const now = new Date();
-  const yearMonth = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const prefix = `INV-${yearMonth}-`;
-
-  // Get all invoices for current month to find next number
-  const invoicesRef = collection(db, 'invoices');
-  const q = query(
-    invoicesRef,
-    where('companyId', '==', companyId),
-    where('invoiceNumber', '>=', prefix),
-    where('invoiceNumber', '<', `INV-${yearMonth}-9999`)
+  const generateInvoiceNumberFn = httpsCallable<{ companyId: string }, { invoiceNumber: string }>(
+    functions,
+    'generateInvoiceNumber',
   );
 
-  const snapshot = await getDocs(q);
-  const nextNumber = snapshot.docs.length + 1;
-
-  return `${prefix}${String(nextNumber).padStart(4, '0')}`;
+  const result = await generateInvoiceNumberFn({ companyId });
+  return result.data.invoiceNumber;
 }
 
 /**
@@ -114,8 +108,11 @@ export function useInvoices(statusFilter?: InvoiceStatus) {
       }
 
       if (!user.companyId) {
-        console.error('User missing companyId:', user);
-        throw new Error('Error loading ' + user.email + ': User account is not assigned to a company. Please contact your administrator.');
+        throw new Error(
+          'Error loading ' +
+            user.email +
+            ': User account is not assigned to a company. Please contact your administrator.',
+        );
       }
 
       try {
@@ -123,7 +120,7 @@ export function useInvoices(statusFilter?: InvoiceStatus) {
         let q = query(
           invoicesRef,
           where('companyId', '==', user.companyId),
-          orderBy('date', 'desc')
+          orderBy('date', 'desc'),
         );
 
         if (statusFilter) {
@@ -131,7 +128,7 @@ export function useInvoices(statusFilter?: InvoiceStatus) {
             invoicesRef,
             where('companyId', '==', user.companyId),
             where('status', '==', statusFilter),
-            orderBy('date', 'desc')
+            orderBy('date', 'desc'),
           );
         }
 
@@ -139,51 +136,50 @@ export function useInvoices(statusFilter?: InvoiceStatus) {
         const now = new Date();
 
         return snapshot.docs.map((doc) => {
-        const data = doc.data();
-        let status = data.status as InvoiceStatus;
+          const data = doc.data();
+          let status = data.status as InvoiceStatus;
 
-        // Backward compatibility: Default values for new fields
-        const payments = (data.payments || []).map((p: any) => ({
-          ...p,
-          createdAt: p.createdAt?.toDate() || new Date(),
-        }));
-        const amountPaid = data.amountPaid ?? 0;
-        const remainingBalance = data.remainingBalance ?? data.amount;
+          // Backward compatibility: Default values for new fields
+          const payments = (data.payments || []).map((p: any) => ({
+            ...p,
+            createdAt: p.createdAt?.toDate() || new Date(),
+          }));
+          const amountPaid = data.amountPaid ?? 0;
+          const remainingBalance = data.remainingBalance ?? data.amount;
 
-        // Compute overdue status
-        if ((status === 'sent' || status === 'partially_paid') && data.dueDate) {
-          const dueDate = new Date(data.dueDate);
-          if (dueDate < now) {
-            status = 'overdue';
+          // Compute overdue status
+          if ((status === 'sent' || status === 'partially_paid') && data.dueDate) {
+            const dueDate = new Date(data.dueDate);
+            if (dueDate < now) {
+              status = 'overdue';
+            }
           }
-        }
 
-        return {
-          id: doc.id,
-          invoiceNumber: data.invoiceNumber,
-          client: data.client,
-          clientEmail: data.clientEmail,
-          amount: data.amount,
-          subtotal: data.subtotal,
-          tax: data.tax,
-          taxRate: data.taxRate,
-          status,
-          date: data.date,
-          dueDate: data.dueDate,
-          sentDate: data.sentDate,
-          paidDate: data.paidDate,
-          amountPaid,
-          remainingBalance,
-          payments,
-          jobId: data.jobId,
-          notes: data.notes,
-          companyId: data.companyId,
-          createdAt: data.createdAt?.toDate() || new Date(),
-          updatedAt: data.updatedAt?.toDate() || new Date(),
-        } as Invoice;
+          return {
+            id: doc.id,
+            invoiceNumber: data.invoiceNumber,
+            client: data.client,
+            clientEmail: data.clientEmail,
+            amount: data.amount,
+            subtotal: data.subtotal,
+            tax: data.tax,
+            taxRate: data.taxRate,
+            status,
+            date: data.date,
+            dueDate: data.dueDate,
+            sentDate: data.sentDate,
+            paidDate: data.paidDate,
+            amountPaid,
+            remainingBalance,
+            payments,
+            jobId: data.jobId,
+            notes: data.notes,
+            companyId: data.companyId,
+            createdAt: data.createdAt?.toDate() || new Date(),
+            updatedAt: data.updatedAt?.toDate() || new Date(),
+          } as Invoice;
         });
       } catch (error: any) {
-        console.error('Error fetching invoices:', error);
         if (error.code === 'permission-denied') {
           throw new Error('Access denied. Please check your account permissions.');
         }
@@ -482,7 +478,13 @@ export function useRecordPayment() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ invoiceId, payment }: { invoiceId: string; payment: RecordPaymentData }) => {
+    mutationFn: async ({
+      invoiceId,
+      payment,
+    }: {
+      invoiceId: string;
+      payment: RecordPaymentData;
+    }) => {
       const invoiceRef = doc(db, 'invoices', invoiceId);
 
       // Verify invoice exists and belongs to same company

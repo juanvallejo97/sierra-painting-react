@@ -14,6 +14,7 @@ import {
   enableMultiTabIndexedDbPersistence,
 } from 'firebase/firestore';
 import { getStorage, connectStorageEmulator } from 'firebase/storage';
+import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
 import { getAnalytics } from 'firebase/analytics';
 import { envConfig } from './env-config';
 import { logger } from '../services/logger';
@@ -36,6 +37,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
+const functions = getFunctions(app);
 const analytics = typeof window !== 'undefined' ? getAnalytics(app) : null;
 
 // CRITICAL: Connect to emulators FIRST (before any auth operations)
@@ -63,6 +65,13 @@ if (envConfig.useFirebaseEmulators) {
     logger.info('Storage Emulator connected');
   } catch (error) {
     logger.warn('Storage Emulator already connected', error as Error);
+  }
+
+  try {
+    connectFunctionsEmulator(functions, emulatorHost, 5001);
+    logger.info('Functions Emulator connected');
+  } catch (error) {
+    logger.warn('Functions Emulator already connected', error as Error);
   }
 
   logger.info('Firebase Emulators ready', { ui: 'http://localhost:4000' });
@@ -145,5 +154,5 @@ Promise.all([initializeAuthPersistence(), initializeFirestorePersistence()]).cat
 });
 
 // Export initialized services
-export { auth, db, storage, analytics };
+export { auth, db, storage, functions, analytics };
 export default app;
