@@ -1,5 +1,11 @@
 import { AppLayout } from '../../components/layout/AppLayout';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from '../../components/ui/card';
 import { Skeleton } from '../../components/ui/skeleton';
 import { Alert, AlertDescription } from '../../components/ui/alert';
 import {
@@ -86,9 +92,7 @@ export function AdminHomeScreen() {
         {/* Header */}
         <div>
           <h1>Dashboard</h1>
-          <p className="text-muted-foreground">
-            Business overview and key metrics
-          </p>
+          <p className="text-muted-foreground">Business overview and key metrics</p>
         </div>
 
         {/* KPI Cards */}
@@ -233,27 +237,42 @@ export function AdminHomeScreen() {
               {isLoading ? (
                 <Skeleton className="h-[300px] w-full" />
               ) : (
-                <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie
-                      data={jobStatusData}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ name, percent }) =>
-                        `${name}: ${(percent * 100).toFixed(0)}%`
-                      }
-                      outerRadius={80}
-                      fill="#8884d8"
-                      dataKey="value"
-                    >
-                      {jobStatusData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
+                <div
+                  role="img"
+                  aria-label="Job status distribution pie chart showing scheduled, in progress, completed, and cancelled jobs"
+                >
+                  <ResponsiveContainer width="100%" height={300}>
+                    <PieChart>
+                      <Pie
+                        data={jobStatusData}
+                        cx="50%"
+                        cy="45%"
+                        labelLine={false}
+                        label={false}
+                        outerRadius={80}
+                        fill="#8884d8"
+                        dataKey="value"
+                      >
+                        {jobStatusData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        formatter={(value: number) => `${value} jobs`}
+                        contentStyle={{ fontSize: 12 }}
+                      />
+                      <Legend
+                        verticalAlign="bottom"
+                        height={36}
+                        iconType="circle"
+                        formatter={(value, entry) => {
+                          const payload = entry.payload as { value: number };
+                          return `${value}: ${payload.value}`;
+                        }}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
               )}
             </CardContent>
           </Card>
@@ -307,9 +326,7 @@ export function AdminHomeScreen() {
                 <>
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-muted-foreground">Total Revenue</span>
-                    <span className="font-semibold">
-                      {formatCurrency(kpis?.totalRevenue || 0)}
-                    </span>
+                    <span className="font-semibold">{formatCurrency(kpis?.totalRevenue || 0)}</span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-muted-foreground">Total Jobs</span>
@@ -328,9 +345,7 @@ export function AdminHomeScreen() {
                     <span className="font-semibold">{kpis?.approvedEstimates || 0}</span>
                   </div>
                   <div className="flex justify-between items-center pt-3 border-t">
-                    <span className="text-sm font-medium text-destructive">
-                      Overdue Amount
-                    </span>
+                    <span className="text-sm font-medium text-destructive">Overdue Amount</span>
                     <span className="font-semibold text-destructive">
                       {formatCurrency(kpis?.overdueAmount || 0)}
                     </span>

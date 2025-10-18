@@ -1,6 +1,16 @@
-import { useState } from 'react';
+import { useState, lazy, Suspense } from 'react';
 // import { Link } from 'react-router-dom';
-import { Plus, DollarSign, Calendar, FileText, AlertCircle, Trash2, Send, X, Eye } from 'lucide-react';
+import {
+  Plus,
+  DollarSign,
+  Calendar,
+  FileText,
+  AlertCircle,
+  Trash2,
+  Send,
+  X,
+  Eye,
+} from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -10,13 +20,43 @@ import { EmptyState } from '../components/ui/empty-state';
 import { SearchBar } from '../components/ui/search-bar';
 import { Skeleton } from '../components/ui/skeleton';
 import { Alert, AlertDescription } from '../components/ui/alert';
-import { useInvoices, useDeleteInvoice, type Invoice, type InvoiceStatus } from '../hooks/useInvoices';
-import { PartialPaymentDialog } from '../components/dialogs/PartialPaymentDialog';
-import { CreateInvoiceDialog } from '../components/dialogs/CreateInvoiceDialog';
-import { SendInvoiceDialog } from '../components/dialogs/SendInvoiceDialog';
-import { CancelInvoiceDialog } from '../components/dialogs/CancelInvoiceDialog';
-import { ConfirmDeleteDialog } from '../components/dialogs/ConfirmDeleteDialog';
-import { ViewInvoiceDialog } from '../components/dialogs/ViewInvoiceDialog';
+import {
+  useInvoices,
+  useDeleteInvoice,
+  type Invoice,
+  type InvoiceStatus,
+} from '../hooks/useInvoices';
+
+// Lazy load dialogs for better performance
+const PartialPaymentDialog = lazy(() =>
+  import('../components/dialogs/PartialPaymentDialog').then((m) => ({
+    default: m.PartialPaymentDialog,
+  })),
+);
+const CreateInvoiceDialog = lazy(() =>
+  import('../components/dialogs/CreateInvoiceDialog').then((m) => ({
+    default: m.CreateInvoiceDialog,
+  })),
+);
+const EditInvoiceDialog = lazy(() =>
+  import('../components/dialogs/EditInvoiceDialog').then((m) => ({ default: m.EditInvoiceDialog })),
+);
+const SendInvoiceDialog = lazy(() =>
+  import('../components/dialogs/SendInvoiceDialog').then((m) => ({ default: m.SendInvoiceDialog })),
+);
+const CancelInvoiceDialog = lazy(() =>
+  import('../components/dialogs/CancelInvoiceDialog').then((m) => ({
+    default: m.CancelInvoiceDialog,
+  })),
+);
+const ConfirmDeleteDialog = lazy(() =>
+  import('../components/dialogs/ConfirmDeleteDialog').then((m) => ({
+    default: m.ConfirmDeleteDialog,
+  })),
+);
+const ViewInvoiceDialog = lazy(() =>
+  import('../components/dialogs/ViewInvoiceDialog').then((m) => ({ default: m.ViewInvoiceDialog })),
+);
 
 export function InvoicesScreen() {
   const [search, setSearch] = useState('');
@@ -27,20 +67,17 @@ export function InvoicesScreen() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Invoice | null>(null);
   const [viewTarget, setViewTarget] = useState<Invoice | null>(null);
+  const [editTarget, setEditTarget] = useState<Invoice | null>(null);
 
   const deleteInvoice = useDeleteInvoice();
 
   // Fetch invoices based on filter
-  // For 'sent' tab, fetch all and filter client-side to include partially_paid
-  const shouldFetchAll = statusFilter === 'all' || statusFilter === 'sent';
-  const { data: allInvoices = [], isLoading, error } = useInvoices(
-    shouldFetchAll ? undefined : statusFilter
-  );
+  // Always fetch all invoices for proper synchronization across tabs
+  const { data: allInvoices = [], isLoading, error } = useInvoices();
 
-  // Filter by status (for sent tab, include partially_paid)
-  const invoices = statusFilter === 'sent'
-    ? allInvoices.filter(i => i.status === 'sent' || i.status === 'partially_paid')
-    : allInvoices;
+  // Filter by status
+  const invoices =
+    statusFilter === 'all' ? allInvoices : allInvoices.filter((i) => i.status === statusFilter);
 
   // Filter invoices by search
   const filteredInvoices = invoices.filter((invoice) => {
@@ -99,12 +136,11 @@ export function InvoicesScreen() {
           <p className="font-semibold">{formatCurrency(invoice.amount)}</p>
           {invoice.status === 'partially_paid' ? (
             <p className="text-xs text-orange-600">
-              {formatCurrency(invoice.amountPaid)} paid ({Math.round((invoice.amountPaid / invoice.amount) * 100)}%)
+              {formatCurrency(invoice.amountPaid)} paid (
+              {Math.round((invoice.amountPaid / invoice.amount) * 100)}%)
             </p>
           ) : (
-            <p className="text-xs text-muted-foreground">
-              Tax: {formatCurrency(invoice.tax)}
-            </p>
+            <p className="text-xs text-muted-foreground">Tax: {formatCurrency(invoice.tax)}</p>
           )}
         </div>
       ),
@@ -146,11 +182,7 @@ export function InvoicesScreen() {
       render: (invoice) => (
         <div className="flex gap-2 justify-end">
           {/* View button - available for all statuses */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setViewTarget(invoice)}
-          >
+          <Button variant="outline" size="sm" onClick={() => setViewTarget(invoice)}>
             <Eye className="size-3 mr-1" />
             View
           </Button>
@@ -158,19 +190,11 @@ export function InvoicesScreen() {
           {/* Draft actions */}
           {invoice.status === 'draft' && (
             <>
-              <Button
-                size="sm"
-                variant="default"
-                onClick={() => setSendTarget(invoice)}
-              >
+              <Button size="sm" variant="default" onClick={() => setSendTarget(invoice)}>
                 <Send className="size-3 mr-1" />
                 Send
               </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => setDeleteTarget(invoice)}
-              >
+              <Button variant="destructive" size="sm" onClick={() => setDeleteTarget(invoice)}>
                 <Trash2 className="size-4 mr-1" />
                 Delete
               </Button>
@@ -178,21 +202,15 @@ export function InvoicesScreen() {
           )}
 
           {/* Sent/Overdue/Partially Paid actions */}
-          {(invoice.status === 'sent' || invoice.status === 'overdue' || invoice.status === 'partially_paid') && (
+          {(invoice.status === 'sent' ||
+            invoice.status === 'overdue' ||
+            invoice.status === 'partially_paid') && (
             <>
-              <Button
-                size="sm"
-                variant="default"
-                onClick={() => setPaymentTarget(invoice)}
-              >
+              <Button size="sm" variant="default" onClick={() => setPaymentTarget(invoice)}>
                 <DollarSign className="size-3 mr-1" />
                 Record Payment
               </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setCancelTarget(invoice)}
-              >
+              <Button size="sm" variant="outline" onClick={() => setCancelTarget(invoice)}>
                 <X className="size-3 mr-1" />
                 Cancel
               </Button>
@@ -200,33 +218,28 @@ export function InvoicesScreen() {
           )}
 
           {/* Paid actions - view only */}
-          {invoice.status === 'paid' && (
-            <span className="text-sm text-success px-2">Paid ✓</span>
-          )}
+          {invoice.status === 'paid' && <span className="text-sm text-success px-2">Paid ✓</span>}
         </div>
       ),
     },
   ];
 
   // Count invoices by status
-  // Note: 'sent' count includes partially_paid invoices
   const statusCounts = {
     all: allInvoices.length,
-    draft: allInvoices.filter(i => i.status === 'draft').length,
-    sent: allInvoices.filter(i => i.status === 'sent' || i.status === 'partially_paid').length,
-    partially_paid: allInvoices.filter(i => i.status === 'partially_paid').length,
-    paid: allInvoices.filter(i => i.status === 'paid').length,
-    overdue: allInvoices.filter(i => i.status === 'overdue').length,
+    draft: allInvoices.filter((i) => i.status === 'draft').length,
+    sent: allInvoices.filter((i) => i.status === 'sent').length,
+    partially_paid: allInvoices.filter((i) => i.status === 'partially_paid').length,
+    paid: allInvoices.filter((i) => i.status === 'paid').length,
+    overdue: allInvoices.filter((i) => i.status === 'overdue').length,
   };
 
   // Calculate totals (use allInvoices to get accurate totals)
   const totals = {
     outstanding: allInvoices
-      .filter(i => i.status === 'sent' || i.status === 'overdue' || i.status === 'partially_paid')
+      .filter((i) => i.status === 'sent' || i.status === 'overdue' || i.status === 'partially_paid')
       .reduce((sum, i) => sum + i.remainingBalance, 0),
-    paid: allInvoices
-      .filter(i => i.status === 'paid')
-      .reduce((sum, i) => sum + i.amount, 0),
+    paid: allInvoices.filter((i) => i.status === 'paid').reduce((sum, i) => sum + i.amount, 0),
   };
 
   return (
@@ -247,9 +260,7 @@ export function InvoicesScreen() {
         {/* Error Alert */}
         {error && (
           <Alert variant="destructive">
-            <AlertDescription>
-              Failed to load invoices. Please try again.
-            </AlertDescription>
+            <AlertDescription>Failed to load invoices. Please try again.</AlertDescription>
           </Alert>
         )}
 
@@ -273,24 +284,16 @@ export function InvoicesScreen() {
                 <DollarSign className="size-4" />
                 Paid This Month
               </div>
-              <p className="text-2xl font-bold text-green-600">
-                {formatCurrency(totals.paid)}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {statusCounts.paid} invoice(s)
-              </p>
+              <p className="text-2xl font-bold text-green-600">{formatCurrency(totals.paid)}</p>
+              <p className="text-xs text-muted-foreground mt-1">{statusCounts.paid} invoice(s)</p>
             </div>
             <div className="p-4 border rounded-lg">
               <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
                 <AlertCircle className="size-4" />
                 Overdue
               </div>
-              <p className="text-2xl font-bold text-destructive">
-                {statusCounts.overdue}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Require immediate attention
-              </p>
+              <p className="text-2xl font-bold text-destructive">{statusCounts.overdue}</p>
+              <p className="text-xs text-muted-foreground mt-1">Require immediate attention</p>
             </div>
           </div>
         )}
@@ -298,23 +301,19 @@ export function InvoicesScreen() {
         {/* Filters */}
         <div className="flex flex-col sm:flex-row gap-4">
           {/* Status Tabs */}
-          <Tabs value={statusFilter} onValueChange={(value) => setStatusFilter(value as InvoiceStatus | 'all')}>
+          <Tabs
+            value={statusFilter}
+            onValueChange={(value) => setStatusFilter(value as InvoiceStatus | 'all')}
+          >
             <TabsList>
-              <TabsTrigger value="all">
-                All ({statusCounts.all})
+              <TabsTrigger value="all">All ({statusCounts.all})</TabsTrigger>
+              <TabsTrigger value="draft">Draft ({statusCounts.draft})</TabsTrigger>
+              <TabsTrigger value="sent">Sent ({statusCounts.sent})</TabsTrigger>
+              <TabsTrigger value="partially_paid">
+                Partially Paid ({statusCounts.partially_paid})
               </TabsTrigger>
-              <TabsTrigger value="draft">
-                Draft ({statusCounts.draft})
-              </TabsTrigger>
-              <TabsTrigger value="sent">
-                Sent ({statusCounts.sent})
-              </TabsTrigger>
-              <TabsTrigger value="paid">
-                Paid ({statusCounts.paid})
-              </TabsTrigger>
-              <TabsTrigger value="overdue">
-                Overdue ({statusCounts.overdue})
-              </TabsTrigger>
+              <TabsTrigger value="paid">Paid ({statusCounts.paid})</TabsTrigger>
+              <TabsTrigger value="overdue">Overdue ({statusCounts.overdue})</TabsTrigger>
             </TabsList>
           </Tabs>
 
@@ -346,10 +345,10 @@ export function InvoicesScreen() {
                 title="No invoices found"
                 description={
                   search
-                    ? 'Try adjusting your search to find what you\'re looking for.'
+                    ? "Try adjusting your search to find what you're looking for."
                     : statusFilter === 'all'
-                    ? 'Get started by creating your first invoice.'
-                    : `No ${statusFilter} invoices at the moment.`
+                      ? 'Get started by creating your first invoice.'
+                      : `No ${statusFilter} invoices at the moment.`
                 }
                 action={
                   !search && statusFilter === 'all'
@@ -378,48 +377,79 @@ export function InvoicesScreen() {
       </div>
 
       {/* Create Invoice Dialog */}
-      <CreateInvoiceDialog
-        open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
-      />
+      <Suspense fallback={null}>
+        <CreateInvoiceDialog open={createDialogOpen} onOpenChange={setCreateDialogOpen} />
+      </Suspense>
 
       {/* Send Invoice Dialog */}
-      <SendInvoiceDialog
-        invoice={sendTarget}
-        open={!!sendTarget}
-        onOpenChange={(open) => !open && setSendTarget(null)}
-      />
+      {sendTarget && (
+        <Suspense fallback={null}>
+          <SendInvoiceDialog
+            invoice={sendTarget}
+            open={!!sendTarget}
+            onOpenChange={(open) => !open && setSendTarget(null)}
+          />
+        </Suspense>
+      )}
 
       {/* Partial/Full Payment Dialog */}
-      <PartialPaymentDialog
-        invoice={paymentTarget}
-        open={!!paymentTarget}
-        onOpenChange={(open) => !open && setPaymentTarget(null)}
-      />
+      {paymentTarget && (
+        <Suspense fallback={null}>
+          <PartialPaymentDialog
+            invoice={paymentTarget}
+            open={!!paymentTarget}
+            onOpenChange={(open) => !open && setPaymentTarget(null)}
+          />
+        </Suspense>
+      )}
 
       {/* Cancel Invoice Dialog */}
-      <CancelInvoiceDialog
-        invoice={cancelTarget}
-        open={!!cancelTarget}
-        onOpenChange={(open) => !open && setCancelTarget(null)}
-      />
+      {cancelTarget && (
+        <Suspense fallback={null}>
+          <CancelInvoiceDialog
+            invoice={cancelTarget}
+            open={!!cancelTarget}
+            onOpenChange={(open) => !open && setCancelTarget(null)}
+          />
+        </Suspense>
+      )}
 
       {/* Confirm Delete Dialog */}
-      <ConfirmDeleteDialog
-        open={!!deleteTarget}
-        onOpenChange={(open) => !open && setDeleteTarget(null)}
-        onConfirm={() => deleteInvoice.mutateAsync(deleteTarget!.id)}
-        title="Delete Draft Invoice"
-        description={`Are you sure you want to delete invoice ${deleteTarget?.invoiceNumber} for ${deleteTarget?.client}? This action cannot be undone.`}
-        isLoading={deleteInvoice.isPending}
-      />
+      {deleteTarget && (
+        <Suspense fallback={null}>
+          <ConfirmDeleteDialog
+            open={!!deleteTarget}
+            onOpenChange={(open) => !open && setDeleteTarget(null)}
+            onConfirm={() => deleteInvoice.mutateAsync(deleteTarget!.id)}
+            title="Delete Draft Invoice"
+            description={`Are you sure you want to delete invoice ${deleteTarget?.invoiceNumber} for ${deleteTarget?.client}? This action cannot be undone.`}
+            isLoading={deleteInvoice.isPending}
+          />
+        </Suspense>
+      )}
 
       {/* View Invoice Dialog */}
-      <ViewInvoiceDialog
-        invoice={viewTarget}
-        open={!!viewTarget}
-        onOpenChange={(open) => !open && setViewTarget(null)}
-      />
+      {viewTarget && (
+        <Suspense fallback={null}>
+          <ViewInvoiceDialog
+            invoice={viewTarget}
+            open={!!viewTarget}
+            onOpenChange={(open) => !open && setViewTarget(null)}
+            onEdit={() => setEditTarget(viewTarget)}
+          />
+        </Suspense>
+      )}
+
+      {/* Edit Invoice Dialog */}
+      {editTarget && (
+        <Suspense fallback={null}>
+          <EditInvoiceDialog
+            invoice={editTarget}
+            open={!!editTarget}
+            onOpenChange={(open) => !open && setEditTarget(null)}
+          />
+        </Suspense>
+      )}
     </AppLayout>
   );
 }

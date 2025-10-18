@@ -4,20 +4,18 @@
  * Displays complete invoice details with options to download PDF or print
  */
 
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '../ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { Separator } from '../ui/separator';
-import { Download, Printer, X, FileText, Calendar, User, Mail } from 'lucide-react';
+import { Download, Printer, X, FileText, Calendar, User, Mail, Edit } from 'lucide-react';
 import type { Invoice } from '../../hooks/useInvoices';
 import { format } from 'date-fns';
-import { downloadInvoicePDF, printInvoicePDF, getDefaultCompanyInfo } from '../../utils/invoice-pdf';
+import {
+  downloadInvoicePDF,
+  printInvoicePDF,
+  getDefaultCompanyInfo,
+} from '../../utils/invoice-pdf';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { useCompany, companyToCompanyInfo } from '../../hooks/useCompany';
@@ -26,13 +24,10 @@ interface ViewInvoiceDialogProps {
   invoice: Invoice | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onEdit?: () => void;
 }
 
-export function ViewInvoiceDialog({
-  invoice,
-  open,
-  onOpenChange,
-}: ViewInvoiceDialogProps) {
+export function ViewInvoiceDialog({ invoice, open, onOpenChange, onEdit }: ViewInvoiceDialogProps) {
   const [isGenerating, setIsGenerating] = useState(false);
   const { data: company } = useCompany();
 
@@ -44,8 +39,7 @@ export function ViewInvoiceDialog({
       const companyInfo = company ? companyToCompanyInfo(company) : getDefaultCompanyInfo();
       await downloadInvoicePDF(invoice, companyInfo);
       toast.success('PDF downloaded successfully');
-    } catch (error) {
-      console.error('Failed to generate PDF:', error);
+    } catch {
       toast.error('Failed to generate PDF. Please try again.');
     } finally {
       setIsGenerating(false);
@@ -57,8 +51,7 @@ export function ViewInvoiceDialog({
       setIsGenerating(true);
       const companyInfo = company ? companyToCompanyInfo(company) : getDefaultCompanyInfo();
       await printInvoicePDF(invoice, companyInfo);
-    } catch (error) {
-      console.error('Failed to print invoice:', error);
+    } catch {
       toast.error('Failed to print invoice. Please try again.');
     } finally {
       setIsGenerating(false);
@@ -86,12 +79,8 @@ export function ViewInvoiceDialog({
         <DialogHeader>
           <div className="flex items-start justify-between">
             <div className="space-y-1">
-              <DialogTitle className="text-2xl">
-                Invoice {invoice.invoiceNumber}
-              </DialogTitle>
-              <DialogDescription>
-                Complete invoice details and payment history
-              </DialogDescription>
+              <DialogTitle className="text-2xl">Invoice {invoice.invoiceNumber}</DialogTitle>
+              <DialogDescription>Complete invoice details and payment history</DialogDescription>
             </div>
             <Badge variant={getStatusVariant(invoice.status)} className="ml-2">
               {invoice.status.toUpperCase()}
@@ -162,9 +151,7 @@ export function ViewInvoiceDialog({
                   <Mail className="h-4 w-4 text-muted-foreground mt-0.5" />
                   <div>
                     <p className="text-sm font-medium">Email</p>
-                    <p className="text-sm text-muted-foreground">
-                      {invoice.clientEmail}
-                    </p>
+                    <p className="text-sm text-muted-foreground">{invoice.clientEmail}</p>
                   </div>
                 </div>
               )}
@@ -174,9 +161,7 @@ export function ViewInvoiceDialog({
                   <FileText className="h-4 w-4 text-muted-foreground mt-0.5" />
                   <div>
                     <p className="text-sm font-medium">Related Job</p>
-                    <p className="text-sm text-muted-foreground">
-                      {invoice.jobId}
-                    </p>
+                    <p className="text-sm text-muted-foreground">{invoice.jobId}</p>
                   </div>
                 </div>
               )}
@@ -239,9 +224,7 @@ export function ViewInvoiceDialog({
                           {payment.reference && ` • Ref: ${payment.reference}`}
                         </p>
                         {payment.notes && (
-                          <p className="text-xs text-muted-foreground mt-1">
-                            {payment.notes}
-                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">{payment.notes}</p>
                         )}
                       </div>
                       <span className="font-semibold text-green-600">
@@ -260,36 +243,43 @@ export function ViewInvoiceDialog({
               <Separator />
               <div className="space-y-2">
                 <h3 className="font-semibold">Notes</h3>
-                <p className="text-sm text-muted-foreground whitespace-pre-wrap">
-                  {invoice.notes}
-                </p>
+                <p className="text-sm text-muted-foreground whitespace-pre-wrap">{invoice.notes}</p>
               </div>
             </>
           )}
 
           {/* Actions */}
           <Separator />
-          <div className="flex gap-2 justify-end">
-            <Button
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              disabled={isGenerating}
-            >
-              <X className="h-4 w-4 mr-2" />
-              Close
-            </Button>
-            <Button
-              variant="outline"
-              onClick={handlePrint}
-              disabled={isGenerating}
-            >
-              <Printer className="h-4 w-4 mr-2" />
-              Print
-            </Button>
-            <Button onClick={handleDownloadPDF} disabled={isGenerating}>
-              <Download className="h-4 w-4 mr-2" />
-              {isGenerating ? 'Generating...' : 'Download PDF'}
-            </Button>
+          <div className="flex gap-2 justify-between">
+            <div className="flex gap-2">
+              {invoice.status === 'draft' && onEdit && (
+                <Button
+                  variant="default"
+                  onClick={() => {
+                    onOpenChange(false);
+                    onEdit();
+                  }}
+                  disabled={isGenerating}
+                >
+                  <Edit className="h-4 w-4 mr-2" />
+                  Edit
+                </Button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isGenerating}>
+                <X className="h-4 w-4 mr-2" />
+                Close
+              </Button>
+              <Button variant="outline" onClick={handlePrint} disabled={isGenerating}>
+                <Printer className="h-4 w-4 mr-2" />
+                Print
+              </Button>
+              <Button onClick={handleDownloadPDF} disabled={isGenerating}>
+                <Download className="h-4 w-4 mr-2" />
+                {isGenerating ? 'Generating...' : 'Download PDF'}
+              </Button>
+            </div>
           </div>
         </div>
       </DialogContent>
