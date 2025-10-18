@@ -8,18 +8,22 @@
  * - Success/error notifications
  */
 
-import {
-  QueryClient,
-  UseMutationOptions,
-  MutationFunction,
-} from '@tanstack/react-query';
+import { QueryClient, UseMutationOptions, MutationFunction } from '@tanstack/react-query';
 import { logger } from '../services/logger';
 import { FirebaseError } from '../services/errors';
+import {
+  updateWithRetry,
+  type VersionedDocument,
+  type ConflictStrategy,
+  type ConflictResolutionResult,
+  getConflictMessage,
+} from './conflict-resolution';
+import type { DocumentReference, Firestore } from 'firebase/firestore';
 
 /**
  * Mutation context for rollback
  */
-export interface MutationContext<TData = any> {
+export interface MutationContext<TData = unknown> {
   previousData?: TData;
   optimisticData?: TData;
   timestamp: number;
@@ -49,7 +53,7 @@ export interface OptimisticUpdateOptions<TData, TVariables> {
  * Create optimistic update handlers
  */
 export function createOptimisticUpdate<TData, TVariables>(
-  options: OptimisticUpdateOptions<TData, TVariables>
+  options: OptimisticUpdateOptions<TData, TVariables>,
 ) {
   const { queryKey, updater, queryClient } = options;
 
@@ -91,7 +95,7 @@ export function createOptimisticUpdate<TData, TVariables>(
     onError: (
       error: unknown,
       variables: TVariables,
-      context: MutationContext<TData> | undefined
+      context: MutationContext<TData> | undefined,
     ) => {
       if (context?.previousData !== undefined) {
         queryClient.setQueryData(queryKey, context.previousData);
@@ -158,9 +162,7 @@ export function isRetryableError(error: unknown): boolean {
   // Network errors
   if (error instanceof Error) {
     const networkMessages = ['network', 'timeout', 'fetch', 'connection'];
-    return networkMessages.some((msg) =>
-      error.message.toLowerCase().includes(msg)
-    );
+    return networkMessages.some((msg) => error.message.toLowerCase().includes(msg));
   }
 
   return false;
@@ -179,8 +181,7 @@ export function getRetryConfig(strategy: RetryStrategy) {
     case RetryStrategy.EXPONENTIAL:
       return {
         retry: 3,
-        retryDelay: (attemptIndex: number) =>
-          Math.min(1000 * 2 ** attemptIndex, 30000),
+        retryDelay: (attemptIndex: number) => Math.min(1000 * 2 ** attemptIndex, 30000),
       };
 
     case RetryStrategy.IMMEDIATE:
@@ -220,7 +221,7 @@ export interface CreateMutationOptions<TData, TVariables, TContext = unknown> {
   /**
    * Optimistic update configuration
    */
-  optimistic?: OptimisticUpdateOptions<any, TVariables>;
+  optimistic?: OptimisticUpdateOptions<unknown, TVariables>;
 
   /**
    * Retry strategy
@@ -252,7 +253,7 @@ export interface CreateMutationOptions<TData, TVariables, TContext = unknown> {
  * Create standardized mutation options
  */
 export function createMutationOptions<TData, TVariables, TContext = unknown>(
-  options: CreateMutationOptions<TData, TVariables, TContext>
+  options: CreateMutationOptions<TData, TVariables, TContext>,
 ): UseMutationOptions<TData, unknown, TVariables, TContext> {
   const {
     mutationFn,
@@ -269,9 +270,7 @@ export function createMutationOptions<TData, TVariables, TContext = unknown>(
   const retryConfig = getRetryConfig(retryStrategy);
 
   // Build optimistic update handlers
-  const optimisticHandlers = optimistic
-    ? createOptimisticUpdate(optimistic)
-    : {};
+  const optimisticHandlers = optimistic ? createOptimisticUpdate(optimistic) : {};
 
   return {
     mutationFn,
@@ -279,9 +278,7 @@ export function createMutationOptions<TData, TVariables, TContext = unknown>(
 
     onMutate: async (variables: TVariables) => {
       // Run custom onMutate first
-      const customContext = customOnMutate
-        ? await customOnMutate(variables)
-        : undefined;
+      const customContext = customOnMutate ? await customOnMutate(variables) : undefined;
 
       // Then run optimistic update
       const optimisticContext = optimisticHandlers.onMutate
@@ -294,7 +291,7 @@ export function createMutationOptions<TData, TVariables, TContext = unknown>(
       } as TContext;
     },
 
-    onSuccess: async (data: TData, variables: TVariables, _context: TContext) => {
+    onSuccess: async (data: TData, variables: TVariables) => {
       // Invalidate related queries
       for (const queryKey of invalidateKeys) {
         await queryClient.invalidateQueries({ queryKey });
@@ -314,7 +311,9 @@ export function createMutationOptions<TData, TVariables, TContext = unknown>(
     onError: (error: unknown, variables: TVariables, context: TContext) => {
       // Rollback optimistic update
       if (optimisticHandlers.onError) {
-        const optimisticContext = (context as any)?.optimistic;
+        const optimisticContext = (context as Record<string, unknown>)?.optimistic as
+          | MutationContext
+          | undefined;
         optimisticHandlers.onError(error, variables, optimisticContext);
       }
 
@@ -343,7 +342,7 @@ export function createMutationOptions<TData, TVariables, TContext = unknown>(
 export function createStandardMutation<TData, TVariables>(
   mutationFn: MutationFunction<TData, TVariables>,
   queryClient: QueryClient,
-  invalidateKeys: readonly (readonly unknown[])[]
+  invalidateKeys: readonly (readonly unknown[])[],
 ) {
   return createMutationOptions({
     mutationFn,
@@ -360,7 +359,7 @@ export function createOptimisticMutation<TData, TVariables>(
   mutationFn: MutationFunction<TData, TVariables>,
   queryClient: QueryClient,
   optimistic: OptimisticUpdateOptions<TData, TVariables>,
-  invalidateKeys: readonly (readonly unknown[])[] = []
+  invalidateKeys: readonly (readonly unknown[])[] = [],
 ) {
   return createMutationOptions({
     mutationFn,
@@ -381,7 +380,7 @@ export async function executeBatchMutation<T>(
   options: {
     batchSize?: number;
     onProgress?: (completed: number, total: number) => void;
-  } = {}
+  } = {},
 ): Promise<void> {
   const { batchSize = 10, onProgress } = options;
   const total = items.length;
@@ -397,7 +396,7 @@ export async function executeBatchMutation<T>(
         if (onProgress) {
           onProgress(completed, total);
         }
-      })
+      }),
     );
   }
 
@@ -405,4 +404,177 @@ export async function executeBatchMutation<T>(
     total,
     batchSize,
   });
+}
+
+/**
+ * Create a version-aware mutation with conflict resolution
+ * Automatically handles conflicts using the specified strategy
+ */
+export interface VersionAwareMutationOptions<TData extends VersionedDocument, TVariables> {
+  /**
+   * Firestore instance
+   */
+  db: Firestore;
+
+  /**
+   * Document reference resolver
+   */
+  getDocRef: (variables: TVariables) => DocumentReference;
+
+  /**
+   * Data mapper
+   */
+  mapData: (variables: TVariables) => Partial<TData>;
+
+  /**
+   * User ID for tracking changes
+   */
+  userId: string;
+
+  /**
+   * Conflict resolution strategy
+   */
+  conflictStrategy?: ConflictStrategy;
+
+  /**
+   * Maximum retry attempts for conflict resolution
+   */
+  maxRetries?: number;
+
+  /**
+   * Query client
+   */
+  queryClient: QueryClient;
+
+  /**
+   * Query keys to invalidate on success
+   */
+  invalidateKeys?: readonly (readonly unknown[])[];
+
+  /**
+   * Custom success handler
+   */
+  onSuccess?: (result: ConflictResolutionResult<TData>, variables: TVariables) => void;
+
+  /**
+   * Custom conflict handler (called when conflict cannot be auto-resolved)
+   */
+  onConflict?: (result: ConflictResolutionResult<TData>, variables: TVariables) => void;
+}
+
+/**
+ * Create a mutation function with version-based conflict resolution
+ */
+export function createVersionAwareMutation<TData extends VersionedDocument, TVariables>(
+  options: VersionAwareMutationOptions<TData, TVariables>,
+): MutationFunction<ConflictResolutionResult<TData>, TVariables> {
+  const {
+    db,
+    getDocRef,
+    mapData,
+    userId,
+    conflictStrategy = 'last-write-wins',
+    maxRetries = 3,
+  } = options;
+
+  return async (variables: TVariables): Promise<ConflictResolutionResult<TData>> => {
+    const docRef = getDocRef(variables);
+    const data = mapData(variables);
+
+    logger.debug('Starting version-aware update', {
+      docId: docRef.id,
+      strategy: conflictStrategy,
+      maxRetries,
+    });
+
+    const result = await updateWithRetry<TData>(
+      db,
+      docRef,
+      data,
+      userId,
+      conflictStrategy,
+      maxRetries,
+    );
+
+    if (!result.success) {
+      if (result.conflict) {
+        logger.warn('Conflict could not be auto-resolved', {
+          docId: docRef.id,
+          conflict: result.conflict,
+        });
+
+        // Call custom conflict handler if provided
+        if (options.onConflict) {
+          options.onConflict(result, variables);
+        }
+      }
+
+      // Throw error to trigger React Query error handling
+      const message = result.conflict
+        ? getConflictMessage(result.conflict)
+        : result.message || 'Update failed';
+
+      throw new Error(message);
+    }
+
+    logger.info('Version-aware update succeeded', {
+      docId: docRef.id,
+      newVersion: result.resolvedData?.version,
+    });
+
+    return result;
+  };
+}
+
+/**
+ * Create complete mutation options with version awareness
+ */
+export function createVersionAwareMutationOptions<TData extends VersionedDocument, TVariables>(
+  options: VersionAwareMutationOptions<TData, TVariables>,
+): UseMutationOptions<ConflictResolutionResult<TData>, unknown, TVariables> {
+  const mutationFn = createVersionAwareMutation(options);
+
+  return {
+    mutationFn,
+    ...getRetryConfig(RetryStrategy.NETWORK_ONLY),
+
+    onSuccess: async (result, variables) => {
+      // Invalidate related queries
+      if (options.invalidateKeys) {
+        for (const queryKey of options.invalidateKeys) {
+          await options.queryClient.invalidateQueries({ queryKey });
+        }
+      }
+
+      // Call custom success handler
+      if (options.onSuccess) {
+        options.onSuccess(result, variables);
+      }
+
+      logger.info('Version-aware mutation succeeded', {
+        variables,
+        version: result.resolvedData?.version,
+      });
+    },
+
+    onError: (error: unknown, variables: TVariables) => {
+      logger.error('Version-aware mutation failed', error as Error, {
+        variables,
+      });
+    },
+  };
+}
+
+/**
+ * Helper to check if an error is a conflict error
+ */
+export function isConflictError(error: unknown): boolean {
+  if (error instanceof Error) {
+    return (
+      error.message.includes('conflict') ||
+      error.message.includes('version') ||
+      error.message.includes('modified by another user')
+    );
+  }
+  return false;
 }

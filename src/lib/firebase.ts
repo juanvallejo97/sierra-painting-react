@@ -7,9 +7,13 @@ import {
   indexedDBLocalPersistence,
   inMemoryPersistence,
 } from 'firebase/auth';
-import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore';
+import {
+  getFirestore,
+  connectFirestoreEmulator,
+  enableIndexedDbPersistence,
+  enableMultiTabIndexedDbPersistence,
+} from 'firebase/firestore';
 import { getStorage, connectStorageEmulator } from 'firebase/storage';
-import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
 import { getAnalytics } from 'firebase/analytics';
 import { envConfig } from './env-config';
 import { logger } from '../services/logger';
@@ -32,7 +36,6 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
-const functions = getFunctions(app);
 const analytics = typeof window !== 'undefined' ? getAnalytics(app) : null;
 
 // CRITICAL: Connect to emulators FIRST (before any auth operations)
@@ -62,13 +65,6 @@ if (envConfig.useFirebaseEmulators) {
     logger.warn('Storage Emulator already connected', error as Error);
   }
 
-  try {
-    connectFunctionsEmulator(functions, emulatorHost, 5001);
-    logger.info('Functions Emulator connected');
-  } catch (error) {
-    logger.warn('Functions Emulator already connected', error as Error);
-  }
-
   logger.info('Firebase Emulators ready', { ui: 'http://localhost:4000' });
 }
 
@@ -91,7 +87,10 @@ async function initializeAuthPersistence() {
         await setPersistence(auth, browserLocalPersistence);
         logger.info('Auth persistence set to localStorage');
       } catch (localStorageError) {
-        logger.warn('localStorage persistence failed, using memory-only', localStorageError as Error);
+        logger.warn(
+          'localStorage persistence failed, using memory-only',
+          localStorageError as Error,
+        );
         // Last resort: in-memory (will not persist across reloads)
         await setPersistence(auth, inMemoryPersistence);
         logger.error('Auth persistence set to memory-only - sessions will NOT persist!');
@@ -104,11 +103,47 @@ async function initializeAuthPersistence() {
   }
 }
 
+/**
+ * Enable Firestore offline persistence
+ * Allows app to work offline and sync when connection is restored
+ */
+async function initializeFirestorePersistence() {
+  try {
+    logger.info('Setting up Firestore offline persistence');
+
+    // Try multi-tab persistence first (allows multiple tabs to work offline)
+    try {
+      await enableMultiTabIndexedDbPersistence(db);
+      logger.info('Firestore multi-tab persistence enabled');
+    } catch (multiTabError) {
+      const error = multiTabError as { code?: string };
+
+      if (error.code === 'failed-precondition') {
+        // Multiple tabs open - try single-tab persistence
+        logger.warn('Multiple tabs detected, trying single-tab persistence');
+        try {
+          await enableIndexedDbPersistence(db);
+          logger.info('Firestore single-tab persistence enabled');
+        } catch (singleTabError) {
+          logger.warn('Single-tab persistence also failed', singleTabError as Error);
+        }
+      } else if (error.code === 'unimplemented') {
+        // Browser doesn't support persistence
+        logger.error('Browser does not support Firestore offline persistence');
+      } else {
+        logger.warn('Firestore persistence setup failed', multiTabError as Error);
+      }
+    }
+  } catch (error) {
+    logger.error('Critical error during Firestore persistence setup', error as Error);
+  }
+}
+
 // Start persistence setup (runs after emulator connection)
-initializeAuthPersistence().catch((error) => {
-  logger.error('Auth persistence initialization failed', error);
+Promise.all([initializeAuthPersistence(), initializeFirestorePersistence()]).catch((error) => {
+  logger.error('Persistence initialization failed', error);
 });
 
 // Export initialized services
-export { auth, db, storage, functions, analytics };
+export { auth, db, storage, analytics };
 export default app;

@@ -59,6 +59,9 @@ export default defineConfig(({ mode }) => {
         workbox: {
           // Cache strategy
           globPatterns: ['**/*.{js,css,html,ico,png,jpg,jpeg,webp,svg,woff,woff2}'],
+          // Navigation fallback for SPA routing
+          navigateFallback: '/index.html',
+          navigateFallbackDenylist: [/^\/api\//],
           runtimeCaching: [
             // Cache Firebase API calls
             {
