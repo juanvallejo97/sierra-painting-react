@@ -532,5 +532,16 @@ service cloud.firestore {
       allow read: if false;   // No client reads
       allow write: if false;  // No client writes (only Cloud Functions)
     }
+
+    // ========================================
+    // Mail Queue Collection (Server-Side Only)
+    // ========================================
+    // This collection is managed by Cloud Functions for sending emails.
+    // Used by Firebase Extension: Trigger Email from Firestore
+    // Clients should NEVER directly access this collection.
+    match /mail/{mailId} {
+      allow read: if false;   // No client reads
+      allow write: if false;  // No client writes (only Cloud Functions)
+    }
   }
 }

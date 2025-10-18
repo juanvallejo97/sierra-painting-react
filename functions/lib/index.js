@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.generateInvoiceNumber = exports.checkUserClaims = exports.backfillUserClaims = exports.getCurrentClaims = exports.assignUserRole = exports.setUserClaimsOnCreate = void 0;
+exports.sendOverdueInvoiceReminders = exports.sendEmployeeInvitation = exports.sendPaymentNotification = exports.sendInvoiceNotification = exports.generateInvoiceNumber = exports.checkUserClaims = exports.backfillUserClaims = exports.getCurrentClaims = exports.assignUserRole = exports.setUserClaimsOnCreate = void 0;
 const admin = __importStar(require("firebase-admin"));
 // Initialize Firebase Admin SDK
 admin.initializeApp();
@@ -49,8 +49,14 @@ Object.defineProperty(exports, "checkUserClaims", { enumerable: true, get: funct
 // Export callable functions
 var invoices_1 = require("./callable/invoices");
 Object.defineProperty(exports, "generateInvoiceNumber", { enumerable: true, get: function () { return invoices_1.generateInvoiceNumber; } });
+var notifications_1 = require("./callable/notifications");
+Object.defineProperty(exports, "sendInvoiceNotification", { enumerable: true, get: function () { return notifications_1.sendInvoiceNotification; } });
+Object.defineProperty(exports, "sendPaymentNotification", { enumerable: true, get: function () { return notifications_1.sendPaymentNotification; } });
+Object.defineProperty(exports, "sendEmployeeInvitation", { enumerable: true, get: function () { return notifications_1.sendEmployeeInvitation; } });
+// Export scheduled functions
+var overdue_invoices_1 = require("./scheduled/overdue-invoices");
+Object.defineProperty(exports, "sendOverdueInvoiceReminders", { enumerable: true, get: function () { return overdue_invoices_1.sendOverdueInvoiceReminders; } });
 // Future exports will include:
 // - App Check middleware
-// - Scheduled backup functions
 // - Analytics functions
 //# sourceMappingURL=index.js.map

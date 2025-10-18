@@ -12,7 +12,8 @@ import {
   serverTimestamp,
   orderBy,
 } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../lib/firebase';
 import { useAuth } from '../lib/auth-context';
 import type { UserRole } from '../types';
 
@@ -57,7 +58,7 @@ export function useEmployees() {
       const q = query(
         employeesRef,
         where('companyId', '==', user.companyId),
-        orderBy('createdAt', 'desc')
+        orderBy('createdAt', 'desc'),
       );
 
       const snapshot = await getDocs(q);
@@ -228,6 +229,34 @@ export function useDeleteEmployee() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['employees', user?.companyId] });
+    },
+  });
+}
+
+/**
+ * Send employee invitation email
+ */
+export interface InviteEmployeeData {
+  employeeEmail: string;
+  employeeName: string;
+  role: UserRole;
+}
+
+export function useInviteEmployee() {
+  return useMutation({
+    mutationFn: async (data: InviteEmployeeData) => {
+      const sendEmployeeInvitationFn = httpsCallable<
+        { employeeEmail: string; employeeName: string; role: string },
+        { success: boolean; message: string }
+      >(functions, 'sendEmployeeInvitation');
+
+      const result = await sendEmployeeInvitationFn({
+        employeeEmail: data.employeeEmail,
+        employeeName: data.employeeName,
+        role: data.role,
+      });
+
+      return result.data;
     },
   });
 }

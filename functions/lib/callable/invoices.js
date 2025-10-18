@@ -53,31 +53,29 @@ const admin = __importStar(require("firebase-admin"));
 exports.generateInvoiceNumber = functions.https.onCall(async (data, context) => {
     // Verify authentication
     if (!context.auth) {
-        throw new functions.https.HttpsError("unauthenticated", "User must be authenticated to generate invoice numbers");
+        throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated to generate invoice numbers');
     }
     // Extract companyId from request
     const { companyId } = data;
     // Validate companyId is provided
-    if (!companyId || typeof companyId !== "string") {
-        throw new functions.https.HttpsError("invalid-argument", "companyId is required and must be a string");
+    if (!companyId || typeof companyId !== 'string') {
+        throw new functions.https.HttpsError('invalid-argument', 'companyId is required and must be a string');
     }
     // Verify user has access to this company (custom claims)
     const userCompanyId = context.auth.token.companyId;
     if (!userCompanyId) {
-        throw new functions.https.HttpsError("permission-denied", "User does not have a company assignment");
+        throw new functions.https.HttpsError('permission-denied', 'User does not have a company assignment');
     }
     if (userCompanyId !== companyId) {
-        throw new functions.https.HttpsError("permission-denied", "User does not have access to this company");
+        throw new functions.https.HttpsError('permission-denied', 'User does not have access to this company');
     }
     // Generate year-month prefix
     const now = new Date();
-    const yearMonth = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const yearMonth = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
     const prefix = `INV-${yearMonth}-`;
     // Use Firestore transaction to ensure atomic increment
     const db = admin.firestore();
-    const counterRef = db
-        .collection("invoiceCounters")
-        .doc(`${companyId}-${yearMonth}`);
+    const counterRef = db.collection('invoiceCounters').doc(`${companyId}-${yearMonth}`);
     try {
         const invoiceNumber = await db.runTransaction(async (transaction) => {
             const counterDoc = await transaction.get(counterRef);
@@ -103,13 +101,13 @@ exports.generateInvoiceNumber = functions.https.onCall(async (data, context) => 
                 });
             }
             // Format as INV-YYYYMM-0001
-            return `${prefix}${String(nextNumber).padStart(4, "0")}`;
+            return `${prefix}${String(nextNumber).padStart(4, '0')}`;
         });
         return { invoiceNumber };
     }
     catch (error) {
-        console.error("Error generating invoice number:", error);
-        throw new functions.https.HttpsError("internal", "Failed to generate invoice number. Please try again.");
+        console.error('Error generating invoice number:', error);
+        throw new functions.https.HttpsError('internal', 'Failed to generate invoice number. Please try again.');
     }
 });
 //# sourceMappingURL=invoices.js.map

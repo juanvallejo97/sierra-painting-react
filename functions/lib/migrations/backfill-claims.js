@@ -78,19 +78,19 @@ exports.backfillUserClaims = functions.https.onCall(async (data, context) => {
     // Security Layer 1: Verify App Check token
     (0, app_check_1.verifyAppCheck)(context, {
         monitorOnly: !(0, app_check_1.isAppCheckEnforced)(),
-        errorMessage: "App Check verification failed for backfillUserClaims",
+        errorMessage: 'App Check verification failed for backfillUserClaims',
     });
     // Security Layer 2: Only admins can run migrations
     if (!context.auth) {
-        throw new functions.https.HttpsError("unauthenticated", "Must be logged in to run migrations");
+        throw new functions.https.HttpsError('unauthenticated', 'Must be logged in to run migrations');
     }
-    if (context.auth.token.role !== "admin") {
-        functions.logger.warn("Non-admin attempted to run migration", {
+    if (context.auth.token.role !== 'admin') {
+        functions.logger.warn('Non-admin attempted to run migration', {
             userId: context.auth.uid,
         });
-        throw new functions.https.HttpsError("permission-denied", "Only admins can run migrations");
+        throw new functions.https.HttpsError('permission-denied', 'Only admins can run migrations');
     }
-    functions.logger.info("Starting custom claims backfill migration", {
+    functions.logger.info('Starting custom claims backfill migration', {
         initiatedBy: context.auth.uid,
     });
     const results = {
@@ -102,7 +102,7 @@ exports.backfillUserClaims = functions.https.onCall(async (data, context) => {
     };
     try {
         // Step 1: Get all user documents from Firestore
-        const usersSnapshot = await admin.firestore().collection("users").get();
+        const usersSnapshot = await admin.firestore().collection('users').get();
         results.total = usersSnapshot.size;
         functions.logger.info(`Found ${results.total} users to process`);
         // Step 2: Process each user
@@ -115,7 +115,7 @@ exports.backfillUserClaims = functions.https.onCall(async (data, context) => {
                 const currentClaims = userRecord.customClaims || {};
                 // Step 2b: Check if user already has claims
                 if (currentClaims.role && currentClaims.companyId) {
-                    functions.logger.debug("User already has claims, skipping", { userId });
+                    functions.logger.debug('User already has claims, skipping', { userId });
                     results.skipped++;
                     continue;
                 }
@@ -123,7 +123,7 @@ exports.backfillUserClaims = functions.https.onCall(async (data, context) => {
                 const role = userData.role;
                 const companyId = userData.companyId;
                 if (!role) {
-                    functions.logger.warn("User missing role in Firestore, skipping", {
+                    functions.logger.warn('User missing role in Firestore, skipping', {
                         userId,
                         email: userData.email,
                     });
@@ -132,12 +132,12 @@ exports.backfillUserClaims = functions.https.onCall(async (data, context) => {
                 }
                 // Users without companyId should be marked as pending
                 if (!companyId) {
-                    functions.logger.info("User missing companyId, setting as pending", {
+                    functions.logger.info('User missing companyId, setting as pending', {
                         userId,
                         email: userData.email,
                     });
                     await admin.auth().setCustomUserClaims(userId, {
-                        role: "pending",
+                        role: 'pending',
                         companyId: null,
                         createdAt: Date.now(),
                         migratedAt: Date.now(),
@@ -146,9 +146,9 @@ exports.backfillUserClaims = functions.https.onCall(async (data, context) => {
                     continue;
                 }
                 // Step 2d: Validate role is valid
-                const validRoles = ["admin", "manager", "worker", "crew", "staff"];
+                const validRoles = ['admin', 'manager', 'worker', 'crew', 'staff'];
                 if (!validRoles.includes(role)) {
-                    functions.logger.error("Invalid role found in Firestore", {
+                    functions.logger.error('Invalid role found in Firestore', {
                         userId,
                         role,
                         email: userData.email,
@@ -171,12 +171,12 @@ exports.backfillUserClaims = functions.https.onCall(async (data, context) => {
                 };
                 await admin.auth().setCustomUserClaims(userId, newClaims);
                 // Step 2f: Mark user document as migrated (for audit purposes)
-                await admin.firestore().collection("users").doc(userId).update({
+                await admin.firestore().collection('users').doc(userId).update({
                     claimsMigrated: true,
                     claimsMigratedAt: admin.firestore.FieldValue.serverTimestamp(),
                     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 });
-                functions.logger.info("Successfully migrated user", {
+                functions.logger.info('Successfully migrated user', {
                     userId,
                     email: userData.email,
                     role,
@@ -185,7 +185,7 @@ exports.backfillUserClaims = functions.https.onCall(async (data, context) => {
                 results.updated++;
             }
             catch (error) {
-                functions.logger.error("Failed to migrate user", {
+                functions.logger.error('Failed to migrate user', {
                     userId,
                     error: error.message,
                 });
@@ -198,16 +198,16 @@ exports.backfillUserClaims = functions.https.onCall(async (data, context) => {
             }
         }
         // Step 3: Log final results
-        functions.logger.info("Custom claims backfill migration completed", results);
+        functions.logger.info('Custom claims backfill migration completed', results);
         return {
             success: true,
-            message: "Migration completed",
+            message: 'Migration completed',
             results,
         };
     }
     catch (error) {
-        functions.logger.error("Migration failed", { error: error.message });
-        throw new functions.https.HttpsError("internal", `Migration failed: ${error.message}`);
+        functions.logger.error('Migration failed', { error: error.message });
+        throw new functions.https.HttpsError('internal', `Migration failed: ${error.message}`);
     }
 });
 /**
@@ -227,35 +227,37 @@ exports.checkUserClaims = functions.https.onCall(async (data, context) => {
     // Security Layer 1: Verify App Check token
     (0, app_check_1.verifyAppCheck)(context, {
         monitorOnly: !(0, app_check_1.isAppCheckEnforced)(),
-        errorMessage: "App Check verification failed for checkUserClaims",
+        errorMessage: 'App Check verification failed for checkUserClaims',
     });
     // Security Layer 2: Only admins can check other users' claims
     if (!context.auth) {
-        throw new functions.https.HttpsError("unauthenticated", "Must be logged in");
+        throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
     }
     const { userId } = data;
     // Non-admins can only check their own claims
-    if (context.auth.token.role !== "admin" && context.auth.uid !== userId) {
-        throw new functions.https.HttpsError("permission-denied", "Only admins can check other users' claims");
+    if (context.auth.token.role !== 'admin' && context.auth.uid !== userId) {
+        throw new functions.https.HttpsError('permission-denied', "Only admins can check other users' claims");
     }
     try {
         const userRecord = await admin.auth().getUser(userId);
-        const userDoc = await admin.firestore().collection("users").doc(userId).get();
+        const userDoc = await admin.firestore().collection('users').doc(userId).get();
         return {
             success: true,
             userId,
             email: userRecord.email,
             customClaims: userRecord.customClaims || {},
-            firestoreData: userDoc.exists ? {
-                role: (_a = userDoc.data()) === null || _a === void 0 ? void 0 : _a.role,
-                companyId: (_b = userDoc.data()) === null || _b === void 0 ? void 0 : _b.companyId,
-                status: (_c = userDoc.data()) === null || _c === void 0 ? void 0 : _c.status,
-                claimsMigrated: (_d = userDoc.data()) === null || _d === void 0 ? void 0 : _d.claimsMigrated,
-            } : null,
+            firestoreData: userDoc.exists
+                ? {
+                    role: (_a = userDoc.data()) === null || _a === void 0 ? void 0 : _a.role,
+                    companyId: (_b = userDoc.data()) === null || _b === void 0 ? void 0 : _b.companyId,
+                    status: (_c = userDoc.data()) === null || _c === void 0 ? void 0 : _c.status,
+                    claimsMigrated: (_d = userDoc.data()) === null || _d === void 0 ? void 0 : _d.claimsMigrated,
+                }
+                : null,
         };
     }
     catch (error) {
-        throw new functions.https.HttpsError("internal", `Failed to check claims: ${error.message}`);
+        throw new functions.https.HttpsError('internal', `Failed to check claims: ${error.message}`);
     }
 });
 //# sourceMappingURL=backfill-claims.js.map

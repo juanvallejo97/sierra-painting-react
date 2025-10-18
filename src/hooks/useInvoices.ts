@@ -424,13 +424,20 @@ export function useDeleteInvoice() {
 
 /**
  * Send an invoice (draft → sent)
+ * Optionally sends email notification to client
  */
 export function useSendInvoice() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (invoiceId: string) => {
+    mutationFn: async ({
+      invoiceId,
+      sendEmail = false,
+    }: {
+      invoiceId: string;
+      sendEmail?: boolean;
+    }) => {
       const invoiceRef = doc(db, 'invoices', invoiceId);
 
       // Verify invoice exists and belongs to same company
@@ -449,15 +456,26 @@ export function useSendInvoice() {
         throw new Error('Can only send draft invoices');
       }
 
-      await updateDoc(invoiceRef, {
-        status: 'sent',
-        sentDate: new Date().toISOString().split('T')[0],
-        updatedAt: serverTimestamp(),
-      });
+      // If sending email, use Cloud Function (which also updates status)
+      if (sendEmail) {
+        const sendInvoiceNotificationFn = httpsCallable<
+          { invoiceId: string },
+          { success: boolean; message: string }
+        >(functions, 'sendInvoiceNotification');
+
+        await sendInvoiceNotificationFn({ invoiceId });
+      } else {
+        // Just update status without sending email
+        await updateDoc(invoiceRef, {
+          status: 'sent',
+          sentDate: new Date().toISOString().split('T')[0],
+          updatedAt: serverTimestamp(),
+        });
+      }
     },
-    onSuccess: (_, invoiceId) => {
+    onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['invoices', user?.companyId] });
-      queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
+      queryClient.invalidateQueries({ queryKey: ['invoice', variables.invoiceId] });
     },
   });
 }
@@ -481,9 +499,11 @@ export function useRecordPayment() {
     mutationFn: async ({
       invoiceId,
       payment,
+      sendEmail = false,
     }: {
       invoiceId: string;
       payment: RecordPaymentData;
+      sendEmail?: boolean;
     }) => {
       const invoiceRef = doc(db, 'invoices', invoiceId);
 
@@ -550,6 +570,21 @@ export function useRecordPayment() {
       }
 
       await updateDoc(invoiceRef, updateData);
+
+      // Send payment notification email if requested
+      if (sendEmail && invoiceData.clientEmail) {
+        try {
+          const sendPaymentNotificationFn = httpsCallable<
+            { invoiceId: string },
+            { success: boolean; message: string }
+          >(functions, 'sendPaymentNotification');
+
+          await sendPaymentNotificationFn({ invoiceId });
+        } catch (emailError) {
+          // Log email error but don't fail the payment recording
+          console.error('Failed to send payment notification email:', emailError);
+        }
+      }
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['invoices', user?.companyId] });

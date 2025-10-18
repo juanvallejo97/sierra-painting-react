@@ -12,7 +12,15 @@ export { backfillUserClaims, checkUserClaims } from './migrations/backfill-claim
 // Export callable functions
 export { generateInvoiceNumber } from './callable/invoices';
 
+export {
+  sendInvoiceNotification,
+  sendPaymentNotification,
+  sendEmployeeInvitation,
+} from './callable/notifications';
+
+// Export scheduled functions
+export { sendOverdueInvoiceReminders } from './scheduled/overdue-invoices';
+
 // Future exports will include:
 // - App Check middleware
-// - Scheduled backup functions
 // - Analytics functions

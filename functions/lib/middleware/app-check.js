@@ -78,20 +78,20 @@ function verifyAppCheck(context, options = {}) {
     const { monitorOnly = false, errorMessage } = options;
     // Check if App Check token is present
     if (!context.app) {
-        const message = errorMessage || "App Check verification failed: No token provided";
-        functions.logger.warn("App Check verification failed", {
+        const message = errorMessage || 'App Check verification failed: No token provided';
+        functions.logger.warn('App Check verification failed', {
             message,
             uid: (_a = context.auth) === null || _a === void 0 ? void 0 : _a.uid,
             timestamp: Date.now(),
         });
         if (!monitorOnly) {
-            throw new functions.https.HttpsError("failed-precondition", message);
+            throw new functions.https.HttpsError('failed-precondition', message);
         }
         return;
     }
     // Token is present and verified by Firebase automatically
     // context.app contains the verified App Check token data
-    functions.logger.debug("App Check verified", {
+    functions.logger.debug('App Check verified', {
         uid: (_b = context.auth) === null || _b === void 0 ? void 0 : _b.uid,
         appId: (_c = context.app) === null || _c === void 0 ? void 0 : _c.appId,
     });
@@ -129,7 +129,7 @@ function withAppCheck(handler, options = {}) {
  * Default is monitor mode (log only)
  */
 function isAppCheckEnforced() {
-    return process.env.APPCHECK_ENFORCE === "true";
+    return process.env.APPCHECK_ENFORCE === 'true';
 }
 /**
  * Example usage with different modes
