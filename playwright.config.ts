@@ -37,6 +37,8 @@ export default defineConfig({
   // Reporter to use
   reporter: [
     ['html', { outputFolder: 'playwright-report' }],
+    ['json', { outputFile: 'playwright-report/results.json' }],
+    ['junit', { outputFile: 'playwright-report/results.xml' }],
     ['list'],
     ...(process.env.CI ? [['github'] as const] : []),
   ],
@@ -98,5 +100,10 @@ export default defineConfig({
     port: 4173,
     reuseExistingServer: !process.env.CI,
     timeout: 120 * 1000,
+    env: {
+      // Use emulators for E2E tests
+      VITE_USE_FIREBASE_EMULATORS: 'true',
+      VITE_FIREBASE_EMULATOR_HOST: '127.0.0.1',
+    },
   },
 });
